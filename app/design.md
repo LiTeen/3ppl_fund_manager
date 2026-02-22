@@ -1,6 +1,6 @@
 1. Member Model 
     - Member Name: [Teen, Jacky, WCH]
-    - Initial capital: [RM 53,081.42]
+    - Initial capital: [RM 53,081.42] | 21232.57, 21232.57,10616.28
     - Join Date: [3/7/2023]
     - Stake: [0.4,0.4,0.2]
     - Is Active: If the fund ever changes members, you can "deactivate" one without deleting their historical data.
