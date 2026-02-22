@@ -67,3 +67,9 @@ class Loan_Repayment(BaseModel):
 
     payment_type = pw.CharField(max_length=1 , choices = PAYMENT_CHOICES,default = 'p')
     
+## run connection execute
+
+if __name__ == '__main__':
+    db.connect()
+    db.create_tables([Member,Borrower,Loan,Transaction_Ledger,Loan_Repayment],safe=True)
+    db.close()
