@@ -20,9 +20,9 @@ For internal use only.
 
 | Beneficiary | Allocation |
 | ----------- | ---------- |
-| Teen        | 40%        |
-| Jacky       | 40%        |
-| WCH         | 20%        |
+| Member 1    | 40%        |
+| Member 2    | 40%        |
+| Member 3    | 20%        |
 
 Ownership percentages are fixed unless manually adjusted.
 
