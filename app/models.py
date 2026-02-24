@@ -30,7 +30,7 @@ class Loan(BaseModel):
 
     STATUS_CHOICES = (
         ('pd','Pending'),
-        ('pe','Paid Early'),
+        #('pe','Paid Early'),
         ('od','Overdue'),
         ('cl','Closed')
     )
@@ -65,7 +65,7 @@ class Loan_Repayment(BaseModel):
         ('p','Principal reduction')
     )
 
-    payment_type = pw.CharField(max_length=1 , choices = PAYMENT_CHOICES,default = 'p')
+    payment_type = pw.CharField(max_length=1 , choices = PAYMENT_CHOICES)
     
 ## run connection execute
 
