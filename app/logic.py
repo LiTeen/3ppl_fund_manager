@@ -50,11 +50,11 @@ def calculate_interest(loan_id,payment_date=None):
     loan_interest = loan.principal * loan.interest_rate * max(0,loan_days)/ days_in_year(loan.lending_date.year)
     return round_half_up(loan_interest)
 
-def calculate_required_payment(loan_id,target_reduction,date=None):
+def calculate_required_payment(loan_id,target_reduction,target_date=None):
     loan = get_loan_record_by_ID(loan_id)
-    interest_needed = calculate_interest(loan.id)
+    interest_needed = calculate_interest(loan.id,target_date)
 
-    total_required = target_reduction+interest_needed
+    total_required = target_reduction + interest_needed
     return { 'interest': interest_needed,
             'reduction': round_half_up(target_reduction),
             'total': round_half_up(total_required)}
@@ -77,7 +77,7 @@ def check_loan_status(loan_id,date_receive_payment=None):
     if loan.principal == 0 and not loan.status == 'cl': #close loan
         loan.update(status='cl',actual_payback_date=date_receive_payment).where(l.id==loan_id).execute()
         
-    elif not loan.principal == 0 and loan.plan_payback_date < datetime.date.today(): #overdue
+    elif loan.principal != 0 and loan.plan_payback_date < datetime.date.today(): #overdue
         loan.update(status='od').where(l.id==loan_id).execute()
      
     else:
@@ -105,12 +105,14 @@ def record_payment(loan_id,amount_paid,date_received):
             l.update(principal=new_principal).where(l.id ==loan_id).execute()
             t.insert(member=4, amount=principal_reduction, category='principal_returned',loan_id=loan_id).execute()
             payment_type = 'p'
-        if amount_paid > accrued_int:
-            l.update(lending_date = date_received).where(l.id==loan_id).execute()
-            date_obj = datetime.date(date_received)
-            new_payback_date = date_obj.year + 1
+        if amount_paid > accrued_int :
+            new_payback_date = datetime.date(date_received.year + 1,date_received.month,date_received.day)
+            l.update(lending_date = date_received,plan_payback_date=new_payback_date).where(l.id==loan_id).execute()
+            
+            
+            
         #save payment in loan repayment
-        if payment_type:
+        if payment_type and amount_paid != 0:
             r.insert(loan=loan.id, amount_paid=amount_paid, date=date_received, payment_type=payment_type).execute()
         check_loan_status(loan.id,date_received)
 
