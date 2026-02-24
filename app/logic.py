@@ -2,7 +2,7 @@ import datetime as datetime
 import calendar
 from decimal import ROUND_HALF_UP, Decimal
 from peewee import fn
-from dateutil.relativedelta import relativedelta, MO
+#from dateutil.relativedelta import relativedelta, MO
 from models import db,Transaction_Ledger as t, Loan as l, Borrower as b, Member as m, Loan_Repayment as r
 
 db.connect()
@@ -38,7 +38,6 @@ def check_total_stake():
     else:
         return True
 
-
 def calculate_interest(loan_id,payment_date=None):
 
     loan = get_loan_record_by_ID(loan_id)
@@ -50,6 +49,15 @@ def calculate_interest(loan_id,payment_date=None):
 
     loan_interest = loan.principal * loan.interest_rate * max(0,loan_days)/ days_in_year(loan.lending_date.year)
     return round_half_up(loan_interest)
+
+def calculate_required_payment(loan_id,target_reduction,date=None):
+    loan = get_loan_record_by_ID(loan_id)
+    interest_needed = calculate_interest(loan.id)
+
+    total_required = target_reduction+interest_needed
+    return { 'interest': interest_needed,
+            'reduction': round_half_up(target_reduction),
+            'total': round_half_up(total_required)}
 
 def get_member_shares(member_id):
     if check_total_stake() == True:
@@ -99,18 +107,14 @@ def record_payment(loan_id,amount_paid,date_received):
             payment_type = 'p'
         if amount_paid > accrued_int:
             l.update(lending_date = date_received).where(l.id==loan_id).execute()
+            date_obj = datetime.date(date_received)
+            new_payback_date = date_obj.year + 1
         #save payment in loan repayment
         if payment_type:
             r.insert(loan=loan.id, amount_paid=amount_paid, date=date_received, payment_type=payment_type).execute()
         check_loan_status(loan.id,date_received)
 
-#test function
 
-#print(calculate_interest(6))
-#record_payment(1,Decimal(0.01),datetime.date(2026,12,2))
-#m.insert(name='General Fund',initial_capital=0.00,join_date='2023-07-03',stake=0.00,is_active=False)
-#l.update(borrower=1,plan_payback_date='2026-12-01').where(l.id == 3).execute()
-#l.create(borrower=1,principal=4000.00,lending_date='2025-12-31',plan_payback_date='2026-12-01',status='pd')
 
 db.close()
 
