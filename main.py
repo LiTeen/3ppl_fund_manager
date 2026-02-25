@@ -1,0 +1,201 @@
+from fastapi import FastAPI, HTTPException, Depends, Query
+from sqlmodel import Session, select, func
+from typing import List, Optional
+from datetime import date
+from decimal import Decimal
+
+# Import your setup
+from database import get_session, engine
+from models import (
+    Member, Loan, LoanStatus, Borrower, 
+    Transaction_Ledger, TransactionCategory, SQLModel
+)
+import logic
+
+app = FastAPI(title="Fund Manager API")
+
+# Ensure tables are created on startup
+@app.on_event("startup")
+def on_startup():
+    SQLModel.metadata.create_all(engine)
+
+# --- Pydantic Models for Input ---
+from pydantic import BaseModel
+
+class RepaymentRequest(BaseModel):
+    loan_id: int
+    amount: Decimal
+    date_received: date
+
+class LoanCreate(BaseModel):
+    borrower_id: int
+    principal: Decimal
+    plan_payback_date: date
+    lending_date: date = date.today()
+
+class BorrowerCreate(BaseModel):
+    name: str
+
+# --- Routes ---
+
+@app.get("/")
+def root():
+    return {"status": "Online", "fund": "Active"}
+
+@app.get("/dashboard")
+def get_dashboard(session: Session = Depends(get_session)):
+    """The main overview for Teen, Jacky, and WCH."""
+    total_val = logic.total_fund_value(session)
+    
+    # Calculate Total Currently Lent
+    active_loans = session.exec(select(Loan).where(Loan.status != LoanStatus.CLOSED)).all()
+    total_lent = sum(loan.principal for loan in active_loans)
+    
+    # Calculate Member Shares
+    members = session.exec(select(Member).where(Member.is_active == True)).all()
+    member_data = []
+    for m in members:
+        member_data.append({
+            "name": m.name,
+            "stake": f"{m.stake * 100}%",
+            "current_value": float(logic.get_member_shares(session, m.id)),
+            "initial_capital": float(m.initial_capital)
+        })
+
+    return {
+        "summary": {
+            "total_valuation": float(total_val),
+            "cash_on_hand": float(total_val - total_lent),
+            "total_lent": float(total_lent)
+        },
+        "members": member_data,
+        "active_loans_count": len(active_loans)
+    }
+
+@app.get("/loans/active")
+def list_active_loans(session: Session = Depends(get_session)):
+    """Shows all people who currently owe money + live interest."""
+    statement = select(Loan).where(Loan.status != LoanStatus.CLOSED)
+    loans = session.exec(statement).all()
+    
+    results = []
+    for loan in loans:
+        results.append({
+            "loan_id": loan.id,
+            "borrower": loan.borrower.name, # Relationship magic
+            "principal": float(loan.principal),
+            "accrued_interest": float(logic.calculate_interest(session, loan.id)),
+            "due_date": loan.plan_payback_date,
+            "status": loan.status
+        })
+    return results
+
+@app.get("/loans/quote")
+def get_repayment_quote(
+    loan_id: int, 
+    target_reduction: Decimal, 
+    target_date: Optional[date] = None,
+    session: Session = Depends(get_session)
+):
+    """How much to pay to reduce principal by X? (Includes interest)."""
+    quote = logic.calculate_required_payment(session, loan_id, target_reduction, target_date)
+    # Convert Decimals to floats for JSON
+    return {k: float(v) for k, v in quote.items()}
+
+@app.post("/loans/repay")
+def record_repayment(data: RepaymentRequest, session: Session = Depends(get_session)):
+    """The 'Submit' button when you receive cash."""
+    try:
+        updated_loan = logic.record_payment(
+            session, 
+            loan_id=data.loan_id, 
+            amount_paid=data.amount, 
+            date_received=data.date_received
+        )
+        return {
+            "message": "Repayment Successful", 
+            "new_principal": float(updated_loan.principal),
+            "status": updated_loan.status
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/members", response_model=List[Member])
+def get_all_members(session: Session = Depends(get_session)):
+    return session.exec(select(Member)).all()
+
+# 1. Create New Borrower
+@app.post("/borrowers/", response_model=Borrower)
+def create_borrower(data: BorrowerCreate, session: Session = Depends(get_session)):
+    """Add a new person to the system so you can lend to them."""
+    new_borrower = Borrower(name=data.name)
+    session.add(new_borrower)
+    try:
+        session.commit()
+        session.refresh(new_borrower)
+        return new_borrower
+    except Exception:
+        session.rollback()
+        raise HTTPException(status_code=400, detail="Borrower already exists")
+
+# 2. Create New Loan
+@app.post("/loans/")
+def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
+    """Issue a new loan and automatically record the cash leaving the fund."""
+    # Safety Check: Do we have enough cash?
+    current_cash = float(logic.total_fund_value(session)) - sum(l.principal for l in session.exec(select(Loan).where(Loan.status != LoanStatus.CLOSED)).all())
+    if float(data.principal) > current_cash:
+        raise HTTPException(status_code=400, detail=f"Insufficient funds. Max available: {current_cash}")
+
+    # Create the Loan
+    new_loan = Loan(
+        borrower_id=data.borrower_id,
+        principal=data.principal,
+        lending_date=data.lending_date,
+        plan_payback_date=data.plan_payback_date,
+        status=LoanStatus.PENDING
+    )
+    session.add(new_loan)
+    session.flush() # Get the loan ID before committing
+
+    # Create the Ledger Entry (Money leaving the fund)
+    # Member 4 = General Fund / System Account
+    ledger_entry = Transaction_Ledger(
+        member_id=4,
+        amount=-data.principal, # Negative because cash is leaving
+        category=TransactionCategory.LOAN_OUT,
+        loan_id=new_loan.id,
+        remarks=f"Loan issued to Borrower ID {data.borrower_id}"
+    )
+    session.add(ledger_entry)
+    
+    session.commit()
+    return {"message": "Loan issued successfully", "loan_id": new_loan.id}
+
+# 3. Show All Ledger
+@app.get("/ledger/")
+def get_full_ledger(session: Session = Depends(get_session)):
+    """A full audit trail of every cent that entered or left the fund."""
+    statement = select(Transaction_Ledger).order_by(Transaction_Ledger.timestamp.desc())
+    entries = session.exec(statement).all()
+    return entries
+
+# 4. Show Only Profit Earned
+@app.get("/profit/")
+def get_profit_report(session: Session = Depends(get_session)):
+    """Sum of all Interest received (Bank + Loans)."""
+    categories = [TransactionCategory.BANK_INT_RECEIVED, TransactionCategory.LOAN_INT_RECEIVED]
+    
+    profit_statement = select(func.sum(Transaction_Ledger.amount)).where(Transaction_Ledger.category.in_(categories))
+    total_profit = session.exec(profit_statement).one() or Decimal(0)
+    
+    # Optional: Breakdown by category
+    breakdown = {}
+    for cat in categories:
+        val = session.exec(select(func.sum(Transaction_Ledger.amount)).where(Transaction_Ledger.category == cat)).one() or Decimal(0)
+        breakdown[cat.value] = float(val)
+
+    return {
+        "total_profit_earned": float(total_profit),
+        "breakdown": breakdown
+    }

@@ -1,125 +1,153 @@
-import datetime as datetime
 import calendar
 from decimal import ROUND_HALF_UP, Decimal
-from peewee import fn
-#from dateutil.relativedelta import relativedelta, MO
-from models import db,Transaction_Ledger as t, Loan as l, Borrower as b, Member as m, Loan_Repayment as r
+from datetime import date, datetime
+from typing import Optional, Dict
 
-db.connect()
+from sqlmodel import Session, select, func
+from models import (
+    Member, Loan, Transaction_Ledger, Borrower, 
+    Loan_Repayment, LoanStatus, TransactionCategory, PaymentType
+)
 
-def get_loan_record_by_ID(input_ID):
-    try:
-        record = l.get_by_id(input_ID)
-    except l.DoesNotExist:
-        print(f"Loan {input_ID} not found")
-        return
-    return record
-    
-def days_in_year(year):
+# --- UTILITIES ---
+
+def round_half_up(decimal_num: Decimal) -> Decimal:
+    """Standard financial rounding to 2 decimal places."""
+    return Decimal(str(decimal_num)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+def days_in_year(year: int) -> int:
+    """Handles leap years correctly for interest calculation."""
     return 365 + calendar.isleap(year)
 
-def round_half_up(decimal_num):
-    str_num = str(decimal_num)
-    return Decimal(str_num).quantize(Decimal('0.01'),ROUND_HALF_UP)
+# --- READ OPERATIONS ---
 
-def total_fund_value():
+def get_loan_record(session: Session, loan_id: int) -> Optional[Loan]:
+    """Fetches a loan from the database."""
+    return session.get(Loan, loan_id)
+
+def total_fund_value(session: Session) -> Decimal:
+    """Sums all ledger entries and active loan principals."""
+    # Sum Ledger
+    ledger_sum = session.exec(select(func.sum(Transaction_Ledger.amount))).one() or Decimal(0)
+    # Sum Active Loans (Not Closed)
+    active_loan_sum = session.exec(
+        select(func.sum(Loan.principal)).where(Loan.status != LoanStatus.CLOSED)
+    ).one() or Decimal(0)
     
-    ledger_sum = t.select(fn.sum(t.amount)).scalar()
-    active_loan = l.select(fn.sum(l.principal)).where(l.status=='pd').scalar()
+    return round_half_up(ledger_sum + active_loan_sum)
 
-    total_fund_value = ledger_sum + active_loan
-    return total_fund_value
+def check_total_stake(session: Session) -> bool:
+    """Verifies that the sum of active member stakes equals exactly 1.00."""
+    total_stake = session.exec(
+        select(func.sum(Member.stake)).where(Member.is_active == True)
+    ).one() or Decimal(0)
+    
+    # Using string comparison or threshold to avoid float precision issues
+    return round_half_up(total_stake) == Decimal('1.00')
 
-def check_total_stake():
-    total_stake = m.select(fn.sum(m.stake)).where(m.is_active==True).scalar()
-    if total_stake != 1.00:
-        print(f"Warning: Stake is not 100%. >> {total_stake} ") 
-        return False
-    else:
-        return True
+def get_member_shares(session: Session, member_id: int) -> Optional[Decimal]:
+    """Calculates a specific member's share based on current fund valuation."""
+    if not check_total_stake(session):
+        print("Warning: Stake is not 100%.")
+        return None
+        
+    member = session.get(Member, member_id)
+    if not member:
+        return None
+        
+    total_value = total_fund_value(session)
+    share = total_value * member.stake
+    return round_half_up(share)
 
-def calculate_interest(loan_id,payment_date=None):
+# --- INTEREST & QUOTES ---
 
-    loan = get_loan_record_by_ID(loan_id)
+def calculate_interest(session: Session, loan_id: int, payment_date: date = None) -> Decimal:
+    """Calculates 3% simple interest based on actual days elapsed."""
+    loan = get_loan_record(session, loan_id)
+    if not loan: return Decimal(0)
 
-    if payment_date is None:
-        loan_days= (datetime.date.today() - loan.lending_date).days
-    else:
-        loan_days = (payment_date - loan.lending_date).days
+    target_date = payment_date or date.today()
+    loan_days = (target_date - loan.lending_date).days
+    
+    interest = (loan.principal * loan.interest_rate * max(0, loan_days)) / days_in_year(loan.lending_date.year)
+    return round_half_up(interest)
 
-    loan_interest = loan.principal * loan.interest_rate * max(0,loan_days)/ days_in_year(loan.lending_date.year)
-    return round_half_up(loan_interest)
-
-def calculate_required_payment(loan_id,target_reduction,target_date=None):
-    loan = get_loan_record_by_ID(loan_id)
-    interest_needed = calculate_interest(loan.id,target_date)
-
+def calculate_required_payment(session: Session, loan_id: int, target_reduction: Decimal, target_date: date = None) -> Dict:
+    """Tells the borrower how much total cash to pay to achieve a specific principal reduction."""
+    interest_needed = calculate_interest(session, loan_id, target_date)
     total_required = target_reduction + interest_needed
-    return { 'interest': interest_needed,
-            'reduction': round_half_up(target_reduction),
-            'total': round_half_up(total_required)}
-
-def get_member_shares(member_id):
-    if check_total_stake() == True:
-        try:
-            member = m.get_by_id(member_id)
-        except m.DoesNotExist:
-            print(f"Member {member_id} not found")
-            return
-        
-        share = Decimal.from_float(total_fund_value()) * member.stake   
-        return round_half_up(share)
-
-def check_loan_status(loan_id,date_receive_payment=None):
-
-    loan = get_loan_record_by_ID(loan_id)
     
-    if loan.principal == 0 and not loan.status == 'cl': #close loan
-        loan.update(status='cl',actual_payback_date=date_receive_payment).where(l.id==loan_id).execute()
-        
-    elif loan.principal != 0 and loan.plan_payback_date < datetime.date.today(): #overdue
-        loan.update(status='od').where(l.id==loan_id).execute()
-     
+    return { 
+        'interest': interest_needed,
+        'reduction': round_half_up(target_reduction),
+        'total': round_half_up(total_required)
+    }
+
+# --- WRITE OPERATIONS (MUTATIONS) ---
+
+def check_loan_status(session: Session, loan_id: int, date_receive_payment: date = None):
+    """Updates loan status (Closed, Overdue, or Pending) based on balance and dates."""
+    loan = get_loan_record(session, loan_id)
+    if not loan: return
+
+    if loan.principal <= 0:
+        loan.status = LoanStatus.CLOSED
+        loan.actual_payback_date = date_receive_payment or date.today()
+    elif loan.plan_payback_date < date.today():
+        loan.status = LoanStatus.OVERDUE
     else:
-        loan.update(status='pd').where(l.id==loan_id).execute()
-
-def record_payment(loan_id,amount_paid,date_received):
-    loan = get_loan_record_by_ID(loan_id)
+        loan.status = LoanStatus.PENDING
     
-    accrued_int = calculate_interest(loan.id,date_received)
+    session.add(loan)
 
-    interest_portion = min(amount_paid,accrued_int)
+def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_received: date):
+    """Executes the waterfall payment: Interest first, then Principal."""
+    loan = get_loan_record(session, loan_id)
+    if not loan or amount_paid <= 0: return
 
-    with db.atomic():
-        payment_type = 'i'
-        principal_reduction =  round_half_up(amount_paid - interest_portion)  #amount to minus principal  
-        if loan.principal - principal_reduction < 0:   
-            print(f"{principal_reduction} is more than principal: {loan.principal}")
-            return
+    accrued_int = calculate_interest(session, loan_id, date_received)
+    interest_portion = min(amount_paid, accrued_int)
+    principal_reduction = round_half_up(amount_paid - interest_portion)
 
-        if interest_portion > 0: #only interest
-            t.insert(member=4, amount=interest_portion, category='loan_int_received',loan_id=loan_id).execute()
-            payment_type = 'i'
-        if principal_reduction > 0: #have balance for principal    
-            new_principal = round_half_up(loan.principal - principal_reduction)
-            l.update(principal=new_principal).where(l.id ==loan_id).execute()
-            t.insert(member=4, amount=principal_reduction, category='principal_returned',loan_id=loan_id).execute()
-            payment_type = 'p'
-        if amount_paid > accrued_int :
-            new_payback_date = datetime.date(date_received.year + 1,date_received.month,date_received.day)
-            l.update(lending_date = date_received,plan_payback_date=new_payback_date).where(l.id==loan_id).execute()
-            
-            
-            
-        #save payment in loan repayment
-        if payment_type and amount_paid != 0:
-            r.insert(loan=loan.id, amount_paid=amount_paid, date=date_received, payment_type=payment_type).execute()
-        check_loan_status(loan.id,date_received)
+    # 1. Validation
+    if loan.principal - principal_reduction < 0:
+        print(f"Error: {principal_reduction} exceeds principal {loan.principal}")
+        return
 
+    # 2. Database Changes
+    # Note: member_id=4 represents the 'General Fund' system account
+    if interest_portion > 0:
+        int_ledger = Transaction_Ledger(
+            member_id=4, amount=interest_portion, 
+            category=TransactionCategory.LOAN_INT_RECEIVED, loan_id=loan_id
+        )
+        session.add(int_ledger)
 
+    if principal_reduction > 0:
+        loan.principal = round_half_up(loan.principal - principal_reduction)
+        pri_ledger = Transaction_Ledger(
+            member_id=4, amount=principal_reduction, 
+            category=TransactionCategory.PRINCIPAL_RETURNED, loan_id=loan_id
+        )
+        session.add(pri_ledger)
 
-db.close()
-
-
+    # 3. Reset interest clock and extend plan date by 1 year (as requested)
+    loan.lending_date = date_received
+    if amount_paid > accrued_int:
+        loan.plan_payback_date = date(date_received.year + 1, date_received.month, date_received.day)
     
-    
+    session.add(loan)
+
+    # 4. Save Repayment Receipt
+    payment_type = PaymentType.PRINCIPAL if principal_reduction > 0 else PaymentType.INTEREST
+    repayment = Loan_Repayment(
+        loan_id=loan.id, amount_paid=amount_paid, 
+        date=date_received, payment_type=payment_type
+    )
+    session.add(repayment)
+
+    # 5. Commit and Update Status
+    session.commit()
+    session.refresh(loan)
+    check_loan_status(session, loan.id, date_received)
+    session.commit()
