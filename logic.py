@@ -151,3 +151,44 @@ def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_re
     session.refresh(loan)
     check_loan_status(session, loan.id, date_received)
     session.commit()
+
+
+def record_bank_interest(session: Session, amount: Decimal, interest_date: date, remarks: str = None):
+    """Adds bank interest profit to the General Fund (Member 4)."""
+    if amount <= 0:
+        raise ValueError("Interest amount must be positive.")
+    
+    # Member 4 is your 'General Fund' system account
+    new_entry = Transaction_Ledger(
+        member_id=4, 
+        amount=amount, 
+        category=TransactionCategory.BANK_INT_RECEIVED,
+        timestamp=datetime.combine(interest_date, datetime.min.time()),
+        remarks=remarks or "FD Interest Received"
+    )
+    
+    session.add(new_entry)
+    session.commit()
+    return new_entry
+
+
+def record_member_withdrawal(session: Session, member_id: int, amount: Decimal, withdraw_date: date):
+    # 1. Safety Check: Total Fund Cash vs. Withdrawal Amount
+    total_val = total_fund_value(session)
+    active_loans = session.exec(select(func.sum(Loan.principal)).where(Loan.status != LoanStatus.CLOSED)).one() or Decimal(0)
+    cash_on_hand = total_val - active_loans
+
+    if amount > cash_on_hand:
+        raise ValueError(f"Insufficient cash. Max withdrawal allowed: RM {cash_on_hand}")
+
+    # 2. Record the Ledger Entry (Negative Amount)
+    withdrawal = Transaction_Ledger(
+        member_id=member_id,
+        amount=-amount,
+        category=TransactionCategory.CAPITAL_WITHDRAW,
+        timestamp=datetime.combine(withdraw_date, datetime.min.time()),
+        remarks=f"Capital withdrawal by Member ID {member_id}"
+    )
+    session.add(withdrawal)
+    session.commit()
+    return withdrawal

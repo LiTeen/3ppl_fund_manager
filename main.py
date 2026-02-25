@@ -3,16 +3,26 @@ from sqlmodel import Session, select, func
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
-
-# Import your setup
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, ConfigDict
 from database import get_session, engine
+import logic
 from models import (
     Member, Loan, LoanStatus, Borrower, 
     Transaction_Ledger, TransactionCategory, SQLModel
 )
-import logic
+
 
 app = FastAPI(title="Fund Manager API")
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Allows your phone to connect
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Ensure tables are created on startup
 @app.on_event("startup")
@@ -20,23 +30,40 @@ def on_startup():
     SQLModel.metadata.create_all(engine)
 
 # --- Pydantic Models for Input ---
-from pydantic import BaseModel
+# This ensures all your Pydantic models handle Decimals correctly
+class BaseSchema(BaseModel):
+    model_config = ConfigDict(coerce_numbers_to_str=False, json_encoders={Decimal: float})
 
-class RepaymentRequest(BaseModel):
+class RepaymentRequest(BaseSchema):
     loan_id: int
     amount: Decimal
     date_received: date
 
-class LoanCreate(BaseModel):
+class LoanCreate(BaseSchema):
     borrower_id: int
     principal: Decimal
     plan_payback_date: date
     lending_date: date = date.today()
 
-class BorrowerCreate(BaseModel):
+class BorrowerCreate(BaseSchema):
     name: str
 
+class BankInterestRequest(BaseSchema):
+    amount: Decimal
+    interest_date: date
+    remarks: Optional[str] = "Bank Interest Received"
+
+class WithdrawalRequest(BaseSchema): # Uses the Decimal-safe base
+    member_id: int
+    amount: Decimal
+    date: date
+
 # --- Routes ---
+@app.get("/borrowers/search")
+def search_borrower(name: str, session: Session = Depends(get_session)):
+    statement = select(Borrower).where(Borrower.name.contains(name))
+    results = session.exec(statement).all()
+    return results # Returns a list of borrowers with their IDs
 
 @app.get("/")
 def root():
@@ -124,7 +151,7 @@ def record_repayment(data: RepaymentRequest, session: Session = Depends(get_sess
 def get_all_members(session: Session = Depends(get_session)):
     return session.exec(select(Member)).all()
 
-# 1. Create New Borrower
+# Create new borrower
 @app.post("/borrowers/", response_model=Borrower)
 def create_borrower(data: BorrowerCreate, session: Session = Depends(get_session)):
     """Add a new person to the system so you can lend to them."""
@@ -138,7 +165,7 @@ def create_borrower(data: BorrowerCreate, session: Session = Depends(get_session
         session.rollback()
         raise HTTPException(status_code=400, detail="Borrower already exists")
 
-# 2. Create New Loan
+# Create New Loan
 @app.post("/loans/")
 def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
     """Issue a new loan and automatically record the cash leaving the fund."""
@@ -146,6 +173,11 @@ def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
     current_cash = float(logic.total_fund_value(session)) - sum(l.principal for l in session.exec(select(Loan).where(Loan.status != LoanStatus.CLOSED)).all())
     if float(data.principal) > current_cash:
         raise HTTPException(status_code=400, detail=f"Insufficient funds. Max available: {current_cash}")
+    
+    # Fetch the borrower to get the name
+    borrower = session.get(Borrower, data.borrower_id)
+    if not borrower:
+        raise HTTPException(status_code=404, detail="Borrower not found")
 
     # Create the Loan
     new_loan = Loan(
@@ -165,14 +197,14 @@ def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
         amount=-data.principal, # Negative because cash is leaving
         category=TransactionCategory.LOAN_OUT,
         loan_id=new_loan.id,
-        remarks=f"Loan issued to Borrower ID {data.borrower_id}"
+        remarks=f"Loan issued to {borrower.name}"
     )
     session.add(ledger_entry)
     
     session.commit()
     return {"message": "Loan issued successfully", "loan_id": new_loan.id}
 
-# 3. Show All Ledger
+# Show All Ledger
 @app.get("/ledger/")
 def get_full_ledger(session: Session = Depends(get_session)):
     """A full audit trail of every cent that entered or left the fund."""
@@ -180,7 +212,7 @@ def get_full_ledger(session: Session = Depends(get_session)):
     entries = session.exec(statement).all()
     return entries
 
-# 4. Show Only Profit Earned
+# Show Only Profit Earned
 @app.get("/profit/")
 def get_profit_report(session: Session = Depends(get_session)):
     """Sum of all Interest received (Bank + Loans)."""
@@ -199,3 +231,27 @@ def get_profit_report(session: Session = Depends(get_session)):
         "total_profit_earned": float(total_profit),
         "breakdown": breakdown
     }
+
+@app.post("/loans/refresh-all")
+def refresh_all_loan_statuses(session: Session = Depends(get_session)):
+    """Checks every active loan and marks as 'od' if past plan_payback_date."""
+    active_loans = session.exec(select(Loan).where(Loan.status != LoanStatus.CLOSED)).all()
+    updated_count = 0
+    
+    for loan in active_loans:
+        if loan.plan_payback_date < date.today():
+            loan.status = LoanStatus.OVERDUE
+            session.add(loan)
+            updated_count += 1
+            
+    session.commit()
+    return {"message": f"Refresh complete. {updated_count} loans updated to Overdue."}
+
+
+@app.post("/members/withdraw")
+def member_withdraw(data: WithdrawalRequest, session: Session = Depends(get_session)):
+    try:
+        entry = logic.record_member_withdrawal(session, data.member_id, data.amount, data.date)
+        return {"status": "Success", "amount": float(entry.amount)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
