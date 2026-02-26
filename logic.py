@@ -173,22 +173,81 @@ def record_bank_interest(session: Session, amount: Decimal, interest_date: date,
 
 
 def record_member_withdrawal(session: Session, member_id: int, amount: Decimal, withdraw_date: date):
-    # 1. Safety Check: Total Fund Cash vs. Withdrawal Amount
+    # 1. Fetch the Member object
+    member = session.get(Member, member_id)
+    if not member:
+        raise ValueError("Member not found")
+
+    # 2. Safety Check: Fund Cash vs. Withdrawal Amount
     total_val = total_fund_value(session)
-    active_loans = session.exec(select(func.sum(Loan.principal)).where(Loan.status != LoanStatus.CLOSED)).one() or Decimal(0)
+    active_loans = session.exec(
+        select(func.sum(Loan.principal)).where(Loan.status != LoanStatus.CLOSED)
+    ).one() or Decimal(0)
     cash_on_hand = total_val - active_loans
 
     if amount > cash_on_hand:
-        raise ValueError(f"Insufficient cash. Max withdrawal allowed: RM {cash_on_hand}")
+        raise ValueError(f"Insufficient cash. Max allowed: RM {cash_on_hand}")
 
-    # 2. Record the Ledger Entry (Negative Amount)
-    withdrawal = Transaction_Ledger(
+    # 3. Safety Check: Member's own capital
+    # We shouldn't let them withdraw more than they technically own
+    if amount > member.initial_capital:
+        raise ValueError(f"Withdrawal exceeds your initial capital (RM {member.initial_capital})")
+
+    # 4. Record the Ledger Entry (The "Audit Trail")
+    withdrawal_entry = Transaction_Ledger(
         member_id=member_id,
         amount=-amount,
         category=TransactionCategory.CAPITAL_WITHDRAW,
         timestamp=datetime.combine(withdraw_date, datetime.min.time()),
-        remarks=f"Capital withdrawal by Member ID {member_id}"
+        remarks=f"Capital withdrawal by {member.name}"
     )
-    session.add(withdrawal)
+    
+    # 5. Update the Member Model (The "New Principal")
+    member.initial_capital -= amount
+
+    # 6. Commit both changes at once
+    session.add(withdrawal_entry)
+    session.add(member)
     session.commit()
-    return withdrawal
+    
+    session.refresh(member)
+    return withdrawal_entry
+
+
+def record_global_withdrawal(session: Session, total_amount: Decimal, withdraw_date: date):
+    """Withdraws a total sum and splits it across all active members based on their stakes."""
+    
+    # 1. Safety Check: Fund Cash vs. Total Withdrawal
+    total_val = total_fund_value(session)
+    active_loans = session.exec(
+        select(func.sum(Loan.principal)).where(Loan.status != LoanStatus.CLOSED)
+    ).one() or Decimal(0)
+    cash_on_hand = total_val - active_loans
+
+    if total_amount > cash_on_hand:
+        raise ValueError(f"Insufficient cash. Max allowed: RM {cash_on_hand}")
+
+    # 2. Fetch all active members
+    members = session.exec(select(Member).where(Member.is_active == True)).all()
+    
+    with session.begin_nested(): # Create a sub-transaction
+        for member in members:
+            # Calculate this member's portion
+            member_portion = round_half_up(total_amount * member.stake)
+            
+            # A. Record the Ledger Entry (Audit Trail)
+            withdrawal_entry = Transaction_Ledger(
+                member_id=member.id,
+                amount=-member_portion,
+                category=TransactionCategory.CAPITAL_WITHDRAW,
+                timestamp=datetime.combine(withdraw_date, datetime.min.time()),
+                remarks=f"Global withdrawal split for {member.id} (Total: RM {total_amount})"
+            )
+            session.add(withdrawal_entry)
+            
+            # B. Reduce the Member's Initial Capital
+            member.initial_capital -= member_portion
+            session.add(member)
+
+    session.commit()
+    return {"total_withdrawn": float(total_amount), "status": "Success"}

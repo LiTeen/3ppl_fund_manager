@@ -58,6 +58,10 @@ class WithdrawalRequest(BaseSchema): # Uses the Decimal-safe base
     amount: Decimal
     date: date
 
+class GlobalWithdrawRequest(BaseSchema):
+    total_amount: Decimal
+    withdraw_date: date
+    
 # --- Routes ---
 @app.get("/borrowers/search")
 def search_borrower(name: str, session: Session = Depends(get_session)):
@@ -253,5 +257,14 @@ def member_withdraw(data: WithdrawalRequest, session: Session = Depends(get_sess
     try:
         entry = logic.record_member_withdrawal(session, data.member_id, data.amount, data.date)
         return {"status": "Success", "amount": float(entry.amount)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+@app.post("/members/withdraw-global")
+def withdraw_global(data: GlobalWithdrawRequest, session: Session = Depends(get_session)):
+    """Triggers a withdrawal for all partners based on their stakes."""
+    try:
+        result = logic.record_global_withdrawal(session, data.total_amount, data.withdraw_date)
+        return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
