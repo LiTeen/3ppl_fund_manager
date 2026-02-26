@@ -208,13 +208,47 @@ def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
     session.commit()
     return {"message": "Loan issued successfully", "loan_id": new_loan.id}
 
+#Show All Loan
+@app.get("/loans/all")
+def get_all_loans(session: Session = Depends(get_session)):
+    statement = select(Loan).order_by(Loan.status.desc())
+    loans = session.exec(statement).all()
+    
+    results = []
+    for loan in loans:
+        results.append({
+            "id": loan.id,
+            "loan_id": loan.id,
+            "borrower": loan.borrower.name,
+            "principal": float(loan.principal),
+            "interest_rate": float(loan.interest_rate),
+            "lending_date": loan.lending_date.isoformat(),
+            "plan_payback_date": loan.plan_payback_date.isoformat(),
+            "actual_payback_date": loan.actual_payback_date.isoformat() if loan.actual_payback_date else None,
+            "status": loan.status.value
+        })
+    return results
+
 # Show All Ledger
 @app.get("/ledger/")
 def get_full_ledger(session: Session = Depends(get_session)):
     """A full audit trail of every cent that entered or left the fund."""
     statement = select(Transaction_Ledger).order_by(Transaction_Ledger.timestamp.desc())
     entries = session.exec(statement).all()
-    return entries
+    
+    results = []
+    for entry in entries:
+        results.append({
+            "id": entry.id,
+            "member_id": entry.member_id,
+            "member_name": entry.member.name if entry.member else "Unknown",
+            "amount": float(entry.amount),
+            "timestamp": entry.timestamp.isoformat(),
+            "loan_id": entry.loan_id,
+            "category": entry.category.value,
+            "remarks": entry.remarks
+        })
+    return results
 
 # Show Only Profit Earned
 @app.get("/profit/")
