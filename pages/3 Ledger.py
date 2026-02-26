@@ -1,12 +1,14 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from app import refresh_all_data
 
 st.title("Recent Transactions")
 
 # Initialize session state
 if "all_ledger" not in st.session_state:
     st.session_state.all_ledger = []
+    refresh_all_data()
 
 all_data = st.session_state.all_ledger
 

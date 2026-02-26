@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
-from app import refresh_all_loans # Import the global function
+from app import refresh_all_data # Import the global function
 
 st.title("📂 Loan Portfolio")
 if "all_loans" not in st.session_state:
     st.session_state.all_loans = []
-
+    refresh_all_data()
 
 # 2. Setup Filters (Radio or Tabs)
 view_mode = st.radio("Select View", ["Active Loans", "Closed Loans", "All History"], horizontal=True)

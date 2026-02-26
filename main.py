@@ -156,7 +156,7 @@ def get_all_members(session: Session = Depends(get_session)):
     return session.exec(select(Member)).all()
 
 # Create new borrower
-@app.post("/borrowers/", response_model=Borrower)
+@app.post("/borrowers", response_model=Borrower)
 def create_borrower(data: BorrowerCreate, session: Session = Depends(get_session)):
     """Add a new person to the system so you can lend to them."""
     new_borrower = Borrower(name=data.name)
@@ -170,7 +170,7 @@ def create_borrower(data: BorrowerCreate, session: Session = Depends(get_session
         raise HTTPException(status_code=400, detail="Borrower already exists")
 
 # Create New Loan
-@app.post("/loans/")
+@app.post("/loans")
 def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
     """Issue a new loan and automatically record the cash leaving the fund."""
     # Safety Check: Do we have enough cash?
@@ -230,7 +230,7 @@ def get_all_loans(session: Session = Depends(get_session)):
     return results
 
 # Show All Ledger
-@app.get("/ledger/")
+@app.get("/ledger")
 def get_full_ledger(session: Session = Depends(get_session)):
     """A full audit trail of every cent that entered or left the fund."""
     statement = select(Transaction_Ledger).order_by(Transaction_Ledger.timestamp.desc())
@@ -251,7 +251,7 @@ def get_full_ledger(session: Session = Depends(get_session)):
     return results
 
 # Show Only Profit Earned
-@app.get("/profit/")
+@app.get("/profit")
 def get_profit_report(session: Session = Depends(get_session)):
     """Sum of all Interest received (Bank + Loans)."""
     categories = [TransactionCategory.BANK_INT_RECEIVED, TransactionCategory.LOAN_INT_RECEIVED]

@@ -10,6 +10,9 @@ if "all_loans" not in st.session_state:
 if "all_ledger" not in st.session_state:
     st.session_state.all_ledger = []
 
+if "is_synced" not in st.session_state:
+    st.session_state.is_synced = False
+
 # --- API HELPERS ---
 def get_api(endpoint, params=None):
     try:
@@ -24,43 +27,44 @@ def post_api(endpoint, data):
     except: return None
 
 # Global function
-def refresh_all_loans():
-    """Fetches every loan from the DB and saves to state."""
+def refresh_all_data():
+    """Fetches loans and ledger from DB and saves to state."""
+    success = True
+    
     try:
-        response = get_api("loans/all") 
-        if response:
-            st.session_state.all_loans = response
-            return True
+        # Fetch loans
+        loans_response = get_api("loans/all")
+        if loans_response:
+            st.session_state.all_loans = loans_response
         else:
             st.error("Failed to fetch loans")
-            return False
+            success = False
     except Exception as e:
-        st.error(f"Server Offline: {e}")
-        return False
-
-def refresh_all_ledger():
-    """Fetches ledger entries from the DB and saves to state."""
+        st.error(f"Loans error: {e}")
+        success = False
+    
     try:
-        response = get_api("ledger") 
-        if response:
-            st.session_state.all_ledger = response
-            return True
+        # Fetch ledger
+        ledger_response = get_api("ledger")
+        if ledger_response:
+            st.session_state.all_ledger = ledger_response
         else:
             st.error("Failed to fetch ledger")
-            return False
+            success = False
     except Exception as e:
-        st.error(f"Server Offline: {e}")
-        return False
+        st.error(f"Ledger error: {e}")
+        success = False
+    
+    st.session_state.is_synced = True
+    return success
 
-# Initial fetch
-if not st.session_state.all_loans:
-    refresh_all_loans()
-if not st.session_state.all_ledger:
-    refresh_all_ledger()
+# Initial fetch only if empty
+if not st.session_state.is_synced:
+    refresh_all_data()
 
 
-# 1. Provide a Refresh Button
+# Provide a Refresh Button
 if st.sidebar.button("🔄 Sync with Database"):
-    if refresh_all_loans():
+    if refresh_all_data():
         st.success("Synced!")
         st.rerun()
