@@ -1,23 +1,12 @@
-import calendar
 from decimal import ROUND_HALF_UP, Decimal
 from datetime import date, datetime
 from typing import Optional, Dict
-
 from sqlmodel import Session, select, func
+from util import round_half_up,calculate_interest
 from models import (
     Member, Loan, Transaction_Ledger, Borrower, 
     Loan_Repayment, LoanStatus, TransactionCategory, PaymentType
 )
-
-# --- UTILITIES ---
-
-def round_half_up(decimal_num: Decimal) -> Decimal:
-    """Standard financial rounding to 2 decimal places."""
-    return Decimal(str(decimal_num)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-def days_in_year(year: int) -> int:
-    """Handles leap years correctly for interest calculation."""
-    return 365 + calendar.isleap(year)
 
 # --- READ OPERATIONS ---
 
@@ -59,22 +48,18 @@ def get_member_shares(session: Session, member_id: int) -> Optional[Decimal]:
     share = total_value * member.stake
     return round_half_up(share)
 
-# --- INTEREST & QUOTES ---
 
-def calculate_interest(session: Session, loan_id: int, payment_date: date = None) -> Decimal:
-    """Calculates 3% simple interest based on actual days elapsed."""
-    loan = get_loan_record(session, loan_id)
-    if not loan: return Decimal(0)
 
-    target_date = payment_date or date.today()
-    loan_days = (target_date - loan.lending_date).days
-    
-    interest = (loan.principal * loan.interest_rate * max(0, loan_days)) / days_in_year(loan.lending_date.year)
-    return round_half_up(interest)
-
+# --- WRITE OPERATIONS (MUTATIONS) ---
 def calculate_required_payment(session: Session, loan_id: int, target_reduction: Decimal, target_date: date = None) -> Dict:
     """Tells the borrower how much total cash to pay to achieve a specific principal reduction."""
-    interest_needed = calculate_interest(session, loan_id, target_date)
+    loan_instance = session.get(Loan, loan_id)
+    
+    if not loan_instance:
+        raise ValueError(f"Loan with ID {loan_id} not found.")
+
+    interest_needed = calculate_interest(loan_instance, target_date)
+    
     total_required = target_reduction + interest_needed
     
     return { 
@@ -82,8 +67,6 @@ def calculate_required_payment(session: Session, loan_id: int, target_reduction:
         'reduction': round_half_up(target_reduction),
         'total': round_half_up(total_required)
     }
-
-# --- WRITE OPERATIONS (MUTATIONS) ---
 
 def check_loan_status(session: Session, loan_id: int, date_receive_payment: date = None):
     """Updates loan status (Closed, Overdue, or Pending) based on balance and dates."""
@@ -102,55 +85,76 @@ def check_loan_status(session: Session, loan_id: int, date_receive_payment: date
 
 def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_received: date):
     """Executes the waterfall payment: Interest first, then Principal."""
+    
+    # 1. DATABASE LOOKUP (Requires Session)
     loan = get_loan_record(session, loan_id)
-    if not loan or amount_paid <= 0: return
+    if not loan:
+        raise ValueError(f"Loan ID {loan_id} not found.")
 
-    accrued_int = calculate_interest(session, loan_id, date_received)
+    if amount_paid <= 0:
+        raise ValueError("Repayment amount must be greater than zero.")
+
+    # 2. CALCULATION (Pass the loan object, NO session needed here anymore)
+    accrued_int = calculate_interest(loan, date_received)
+    
     interest_portion = min(amount_paid, accrued_int)
     principal_reduction = round_half_up(amount_paid - interest_portion)
 
-    # 1. Validation
+    # 3. VALIDATION
     if loan.principal - principal_reduction < 0:
-        print(f"Error: {principal_reduction} exceeds principal {loan.principal}")
-        return
+        raise ValueError(f"Payment exceeds principal. Max allowed principal reduction: {loan.principal}")
 
-    # 2. Database Changes
-    # Note: member_id=4 represents the 'General Fund' system account
+    # 4. DATABASE CHANGES (Uses the session provided)
     if interest_portion > 0:
         int_ledger = Transaction_Ledger(
-            member_id=4, amount=interest_portion, 
-            category=TransactionCategory.LOAN_INT_RECEIVED, loan_id=loan_id
+            member_id=4, 
+            amount=interest_portion, 
+            category=TransactionCategory.LOAN_INT_RECEIVED, 
+            loan_id=loan.id
         )
         session.add(int_ledger)
 
     if principal_reduction > 0:
         loan.principal = round_half_up(loan.principal - principal_reduction)
         pri_ledger = Transaction_Ledger(
-            member_id=4, amount=principal_reduction, 
-            category=TransactionCategory.PRINCIPAL_RETURNED, loan_id=loan_id
+            member_id=4, 
+            amount=principal_reduction, 
+            category=TransactionCategory.PRINCIPAL_RETURNED, 
+            loan_id=loan.id
         )
         session.add(pri_ledger)
 
-    # 3. Reset interest clock and extend plan date by 1 year (as requested)
+    # 5. UPDATE LOAN STATE
     loan.lending_date = date_received
     if amount_paid > accrued_int:
-        loan.plan_payback_date = date(date_received.year + 1, date_received.month, date_received.day)
+        # Simple +1 year logic
+        try:
+            loan.plan_payback_date = date(date_received.year + 1, date_received.month, date_received.day)
+        except ValueError: 
+            # Handles Feb 29th edge case: move to Feb 28th next year
+            loan.plan_payback_date = date(date_received.year + 1, 2, 28)
     
-    session.add(loan)
-
-    # 4. Save Repayment Receipt
+    # 6. SAVE REPAYMENT RECEIPT
     payment_type = PaymentType.PRINCIPAL if principal_reduction > 0 else PaymentType.INTEREST
     repayment = Loan_Repayment(
-        loan_id=loan.id, amount_paid=amount_paid, 
-        date=date_received, payment_type=payment_type
+        loan_id=loan.id, 
+        amount_paid=amount_paid, 
+        date=date_received, 
+        payment_type=payment_type
     )
     session.add(repayment)
 
-    # 5. Commit and Update Status
+    # 7. FINALIZE (Atomic commit)
     session.commit()
     session.refresh(loan)
+    
+    # Only use session for functions that internally hit the DB
     check_loan_status(session, loan.id, date_received)
+    
     session.commit()
+    session.refresh(loan) 
+    
+    return loan
 
 
 def record_bank_interest(session: Session, amount: Decimal, interest_date: date, remarks: str = None):
@@ -241,7 +245,7 @@ def record_global_withdrawal(session: Session, total_amount: Decimal, withdraw_d
                 amount=-member_portion,
                 category=TransactionCategory.CAPITAL_WITHDRAW,
                 timestamp=datetime.combine(withdraw_date, datetime.min.time()),
-                remarks=f"Global withdrawal split for {member.id} (Total: RM {total_amount})"
+                remarks=f"Global withdrawal split for {member.name} (Total: RM {total_amount})"
             )
             session.add(withdrawal_entry)
             

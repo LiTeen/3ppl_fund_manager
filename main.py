@@ -5,13 +5,13 @@ from datetime import date
 from decimal import Decimal
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict
-from database import get_session, engine
+from database import engine, create_db_and_tables, get_session
 import logic
 from models import (
     Member, Loan, LoanStatus, Borrower, 
     Transaction_Ledger, TransactionCategory, SQLModel
 )
-
+import test_logic 
 
 app = FastAPI(title="Fund Manager API")
 
@@ -27,7 +27,7 @@ app.add_middleware(
 # Ensure tables are created on startup
 @app.on_event("startup")
 def on_startup():
-    SQLModel.metadata.create_all(engine)
+    create_db_and_tables()
 
 # --- Pydantic Models for Input ---
 # This ensures all your Pydantic models handle Decimals correctly
@@ -115,7 +115,7 @@ def list_active_loans(session: Session = Depends(get_session)):
             "loan_id": loan.id,
             "borrower": loan.borrower.name, # Relationship magic
             "principal": float(loan.principal),
-            "accrued_interest": float(logic.calculate_interest(session, loan.id)),
+            "accrued_interest": float(logic.calculate_interest(loan)),
             "due_date": loan.plan_payback_date,
             "status": loan.status
         })
@@ -137,19 +137,29 @@ def get_repayment_quote(
 def record_repayment(data: RepaymentRequest, session: Session = Depends(get_session)):
     """The 'Submit' button when you receive cash."""
     try:
+        # Call the logic function
         updated_loan = logic.record_payment(
             session, 
             loan_id=data.loan_id, 
             amount_paid=data.amount, 
             date_received=data.date_received
         )
+        
+        # updated_loan is guaranteed to exist here because 
+        # logic.py raises an exception if it doesn't.
         return {
             "message": "Repayment Successful", 
             "new_principal": float(updated_loan.principal),
             "status": updated_loan.status
         }
+
+    except ValueError as ve:
+        # This catches "Loan not found" or "Overpayment"
+        raise HTTPException(status_code=400, detail=str(ve))
+    
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # This catches unexpected system/db errors
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
 @app.get("/members", response_model=List[Member])
 def get_all_members(session: Session = Depends(get_session)):
@@ -302,3 +312,11 @@ def withdraw_global(data: GlobalWithdrawRequest, session: Session = Depends(get_
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    
+
+
+
+#--- TEST Routes ---
+@app.post("/test")
+def test_in_main(session: Session = Depends(get_session)):
+    test_logic.test(session)
