@@ -48,9 +48,33 @@ def get_member_shares(session: Session, member_id: int) -> Optional[Decimal]:
     share = total_value * member.stake
     return round_half_up(share)
 
-
+def get_loanable_balance(session: Session) -> Decimal:
+    """
+    Calculates how much cash is actually available to be lent out.
+    Formula: Sum of all Ledger entries (Inflow - Outflow)
+    """
+    # Summing the 'amount' column in the Transaction_Ledger
+    total_balance = session.query(func.sum(Transaction_Ledger.amount)).scalar() or 0
+    
+    return Decimal(total_balance or 0)
 
 # --- WRITE OPERATIONS (MUTATIONS) ---
+def calculate_total_profit(session: Session):
+    """Business logic to sum all interest received."""
+    categories = [TransactionCategory.BANK_INT_RECEIVED, TransactionCategory.LOAN_INT_RECEIVED]
+    
+    # Sum total
+    profit_statement = select(func.sum(Transaction_Ledger.amount)).where(Transaction_Ledger.category.in_(categories))
+    total_profit = session.exec(profit_statement).one() or Decimal(0)
+    
+    # Get breakdown
+    breakdown = {}
+    for cat in categories:
+        val = session.exec(select(func.sum(Transaction_Ledger.amount)).where(Transaction_Ledger.category == cat)).one() or Decimal(0)
+        breakdown[cat.value] = float(val)
+        
+    return total_profit, breakdown
+
 def calculate_required_payment(session: Session, loan_id: int, target_reduction: Decimal, target_date: date = None) -> Dict:
     """Tells the borrower how much total cash to pay to achieve a specific principal reduction."""
     loan_instance = session.get(Loan, loan_id)
@@ -160,7 +184,7 @@ def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_re
 def record_bank_interest(session: Session, amount: Decimal, interest_date: date, remarks: str = None):
     """Adds bank interest profit to the General Fund (Member 4)."""
     if amount <= 0:
-        raise ValueError("Interest amount must be positive.")
+        raise ValueError("Income amount must be positive.")
     
     # Member 4 is your 'General Fund' system account
     new_entry = Transaction_Ledger(
@@ -168,7 +192,7 @@ def record_bank_interest(session: Session, amount: Decimal, interest_date: date,
         amount=amount, 
         category=TransactionCategory.BANK_INT_RECEIVED,
         timestamp=datetime.combine(interest_date, datetime.min.time()),
-        remarks=remarks or "FD Interest Received"
+        remarks=remarks 
     )
     
     session.add(new_entry)

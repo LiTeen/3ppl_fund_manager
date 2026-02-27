@@ -1,11 +1,8 @@
 import streamlit as st
 import pandas as pd
-from app import refresh_all_data # Import the global function
+from app import refresh_all_data 
 
 st.title("📂 Loan Portfolio")
-if "all_loans" not in st.session_state:
-    st.session_state.all_loans = []
-    refresh_all_data()
 
 # 2. Setup Filters (Radio or Tabs)
 view_mode = st.radio("Select View", ["Active Loans", "Closed Loans", "All History"], horizontal=True)
@@ -31,3 +28,9 @@ if all_data:
         st.info(f"No {view_mode} found.")
 else:
     st.warning("No data available. Please Sync.")
+
+    # Provide a Refresh Button
+if st.sidebar.button("🔄 Sync with Database"):
+    if refresh_all_data():
+        st.success("Synced!")
+        st.rerun()

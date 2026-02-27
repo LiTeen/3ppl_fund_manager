@@ -4,6 +4,9 @@ import requests
 API_URL = "http://localhost:8000"
 
 # Initialize
+if "all_dash" not in st.session_state:
+    st.session_state.all_dash = []
+
 if "all_loans" not in st.session_state:
     st.session_state.all_loans = []
 
@@ -32,6 +35,18 @@ def refresh_all_data():
     success = True
     
     try:
+        # Fetch dashboard
+        dashboard_response = get_api("dashboard")
+        if dashboard_response:
+            st.session_state.all_dash = dashboard_response
+        else:
+            st.error("Failed to fetch dashboard")
+            success = False
+    except Exception as e:
+        st.error(f"dashboard error: {e}")
+        success = False
+
+    try:
         # Fetch loans
         loans_response = get_api("loans/all")
         if loans_response:
@@ -54,7 +69,7 @@ def refresh_all_data():
     except Exception as e:
         st.error(f"Ledger error: {e}")
         success = False
-    
+
     st.session_state.is_synced = True
     return success
 
@@ -63,8 +78,3 @@ if not st.session_state.is_synced:
     refresh_all_data()
 
 
-# Provide a Refresh Button
-if st.sidebar.button("🔄 Sync with Database"):
-    if refresh_all_data():
-        st.success("Synced!")
-        st.rerun()
