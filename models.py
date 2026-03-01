@@ -18,6 +18,7 @@ class TransactionCategory(str, Enum):
     PRINCIPAL_RETURNED = "principal_returned"
     LOAN_INT_RECEIVED = "loan_int_received"
     CAPITAL_IN = "capital_in"
+    EXPENSE_OUT = "expense_out"
 
 class PaymentType(str, Enum):
     INTEREST = "i"

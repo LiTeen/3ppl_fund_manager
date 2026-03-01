@@ -51,8 +51,14 @@ class BorrowerCreate(BaseSchema):
 
 class BankInterestRequest(BaseSchema):
     amount: Decimal
-    interest_date: date
+    record_interest_date: date
     remarks: Optional[str] = "FD Interest Received"
+
+class ExpensesRequest(BaseSchema):
+    amount: Decimal
+    record_expense_date: date
+    remarks: Optional[str] = "Expense out"
+
 
 class WithdrawalRequest(BaseSchema): # Uses the Decimal-safe base
     member_id: int
@@ -66,38 +72,15 @@ class GlobalWithdrawRequest(BaseSchema):
 
 
 # --- Routes ---
-@app.get("/borrowers/search")
-def search_borrower(name: str, session: Session = Depends(get_session)):
-    statement = select(Borrower).where(Borrower.name.contains(name))
-    results = session.exec(statement).all()
-    return results # Returns a list of borrowers with their IDs
+# @app.get("/borrowers/search")
+# def search_borrower(name: str, session: Session = Depends(get_session)):
+#     statement = select(Borrower).where(Borrower.name.contains(name))
+#     results = session.exec(statement).all()
+#     return results # Returns a list of borrowers with their IDs
 
 @app.get("/")
 def root():
     return {"status": "Online", "fund": "Active"}
-
-@app.get("/loans/calculate-total")
-def get_total_needed(loan_id: int, target_reduction: Decimal, target_date: date, session: Session = Depends(get_session)):
-    loan = logic.get_loan_record(session, loan_id)
-    if not loan: return {"total": 0}
-    interest = logic.calculate_interest(loan, target_date)
-    return {"total": float(target_reduction + interest)}
-
-@app.get("/loans/interest-only")
-def get_interest_only(loan_id: int, target_date: date, session: Session = Depends(get_session)):
-    loan = logic.get_loan_record(session, loan_id)
-    if not loan: return {"interest": 0}
-    interest = logic.calculate_interest(loan, target_date)
-    return {"interest": float(interest)}
-
-# Show Only Profit Earned
-@app.get("/profit")
-def get_profit_report(session: Session = Depends(get_session)):
-    total_profit, breakdown = logic.calculate_total_profit(session)
-    return {
-        "total_profit_earned": float(total_profit),
-        "breakdown": breakdown
-    }
 
 @app.get("/dashboard")
 def get_dashboard(session: Session = Depends(get_session)):
@@ -107,7 +90,6 @@ def get_dashboard(session: Session = Depends(get_session)):
     active_loans = session.exec(select(Loan).where(Loan.status != LoanStatus.CLOSED)).all()
     total_lent = sum(loan.principal for loan in active_loans)
     
-    # FIX: Call the logic function directly, NOT the endpoint
     total_profit, _ = logic.calculate_total_profit(session)
    
     members = session.exec(select(Member).where(Member.id < 4)).all()
@@ -128,6 +110,49 @@ def get_dashboard(session: Session = Depends(get_session)):
         "members": member_data
     }
 
+@app.get("/members", response_model=List[Member])
+def get_all_members(session: Session = Depends(get_session)):
+    return session.exec(select(Member)).all()
+
+@app.post("/members/withdraw")
+def member_withdraw(data: WithdrawalRequest, session: Session = Depends(get_session)):
+    try:
+        entry = logic.record_member_withdrawal(session, data.member_id, data.amount, data.date)
+        return {"status": "Success", "amount": float(entry.amount)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+#@app.post("/members/withdraw-global")
+def withdraw_global(data: GlobalWithdrawRequest, session: Session = Depends(get_session)):
+    """Triggers a withdrawal for all partners based on their stakes."""
+    try:
+        result = logic.record_global_withdrawal(session, data.total_amount, data.withdraw_date)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+#Show All Loan
+@app.get("/loans")
+def get_all_loans(session: Session = Depends(get_session)):
+    statement = select(Loan).order_by(Loan.status.desc())
+    loans = session.exec(statement).all()
+    
+    results = []
+    for loan in loans:
+        results.append({
+            "id": loan.id,
+            "loan_id": loan.id,
+            "borrower": loan.borrower.name,
+            "principal": float(loan.principal),
+            "interest_rate": float(loan.interest_rate),
+            "lending_date": loan.lending_date.isoformat(),
+            "plan_payback_date": loan.plan_payback_date.isoformat(),
+            "actual_payback_date": loan.actual_payback_date.isoformat() if loan.actual_payback_date else None,
+            "status": loan.status.value
+        })
+    return results
+
+
 @app.get("/loans/active")
 def list_active_loans(session: Session = Depends(get_session)):
     """Shows all people who currently owe money + live interest."""
@@ -146,66 +171,15 @@ def list_active_loans(session: Session = Depends(get_session)):
         })
     return results
 
-@app.get("/loans/quote")
-def get_repayment_quote(
-    loan_id: int, 
-    target_reduction: Decimal, 
-    target_date: Optional[date] = None,
-    session: Session = Depends(get_session)
-):
-    """How much to pay to reduce principal by X? (Includes interest)."""
-    quote = logic.calculate_required_payment(session, loan_id, target_reduction, target_date)
-    # Convert Decimals to floats for JSON
-    return {k: float(v) for k, v in quote.items()}
-
-@app.post("/loans/repay")
-def record_repayment(data: RepaymentRequest, session: Session = Depends(get_session)):
-    """The 'Submit' button when you receive cash."""
-    try:
-        # Call the logic function
-        updated_loan = logic.record_payment(
-            session, 
-            loan_id=data.loan_id, 
-            amount_paid=data.amount, 
-            date_received=data.date_received
-        )
-        
-        # updated_loan is guaranteed to exist here because 
-        # logic.py raises an exception if it doesn't.
-        return {
-            "message": "Repayment Successful", 
-            "new_principal": float(updated_loan.principal),
-            "status": updated_loan.status
-        }
-
-    except ValueError as ve:
-        # This catches "Loan not found" or "Overpayment"
-        raise HTTPException(status_code=400, detail=str(ve))
-    
-    except Exception as e:
-        # This catches unexpected system/db errors
-        raise HTTPException(status_code=500, detail="An internal server error occurred.")
-
-@app.get("/members", response_model=List[Member])
-def get_all_members(session: Session = Depends(get_session)):
-    return session.exec(select(Member)).all()
-
-# Create new borrower
-@app.post("/borrowers", response_model=Borrower)
-def create_borrower(data: BorrowerCreate, session: Session = Depends(get_session)):
-    """Add a new person to the system so you can lend to them."""
-    new_borrower = Borrower(name=data.name)
-    session.add(new_borrower)
-    try:
-        session.commit()
-        session.refresh(new_borrower)
-        return new_borrower
-    except Exception:
-        session.rollback()
-        raise HTTPException(status_code=400, detail="Borrower already exists")
+@app.get("/loans/calculator")
+def get_total_needed(loan_id: int, target_reduction: Decimal, target_date: date, session: Session = Depends(get_session)):
+    loan = logic.get_loan_record(session, loan_id)
+    if not loan: return {"total": 0}
+    interest = logic.calculate_interest(loan, target_date)
+    return {"total": float(target_reduction + interest)}
 
 # Create New Loan
-@app.post("/loans")
+@app.post("/loans/issue")
 def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
     """Issue a new loan and automatically record the cash leaving the fund."""
     # Safety Check: Do we have enough cash?
@@ -247,26 +221,46 @@ def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
     else:
         return {"message": "Loan amount cannot be 0 or negative."}
 
-#Show All Loan
-@app.get("/loans/all")
-def get_all_loans(session: Session = Depends(get_session)):
-    statement = select(Loan).order_by(Loan.status.desc())
-    loans = session.exec(statement).all()
+@app.get("/loans/quote")
+def get_repayment_quote(
+    loan_id: int, 
+    target_reduction: Decimal, 
+    target_date: Optional[date] = None,
+    session: Session = Depends(get_session)
+):
+    """How much to pay to reduce principal by X? (Includes interest)."""
+    quote = logic.calculate_required_payment(session, loan_id, target_reduction, target_date)
+    # Convert Decimals to floats for JSON
+    return {k: float(v) for k, v in quote.items()}
+
+@app.post("/loans/repay")
+def record_repayment(data: RepaymentRequest, session: Session = Depends(get_session)):
+    """The 'Submit' button when you receive cash."""
+    try:
+        # Call the logic function
+        updated_loan = logic.record_payment(
+            session, 
+            loan_id=data.loan_id, 
+            amount_paid=data.amount, 
+            date_received=data.date_received
+        )
+        
+        # updated_loan is guaranteed to exist here because 
+        # logic.py raises an exception if it doesn't.
+        return {
+            "message": "Repayment Successful", 
+            "new_principal": float(updated_loan.principal),
+            "status": updated_loan.status
+        }
+
+    except ValueError as ve:
+        # This catches "Loan not found" or "Overpayment"
+        raise HTTPException(status_code=400, detail=str(ve))
     
-    results = []
-    for loan in loans:
-        results.append({
-            "id": loan.id,
-            "loan_id": loan.id,
-            "borrower": loan.borrower.name,
-            "principal": float(loan.principal),
-            "interest_rate": float(loan.interest_rate),
-            "lending_date": loan.lending_date.isoformat(),
-            "plan_payback_date": loan.plan_payback_date.isoformat(),
-            "actual_payback_date": loan.actual_payback_date.isoformat() if loan.actual_payback_date else None,
-            "status": loan.status.value
-        })
-    return results
+    except Exception as e:
+        # This catches unexpected system/db errors
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")
+
 
 # Show All Ledger
 @app.get("/ledger")
@@ -289,6 +283,83 @@ def get_full_ledger(session: Session = Depends(get_session)):
         })
     return results
 
+@app.post("/ledger/expense")    
+def record_expense(data: ExpensesRequest, session: Session = Depends(get_session)):
+    """Records expenses by the fund's bank account (Member 4)."""
+    try:
+        new_expense = logic.record_expense_interest(
+            session=session,
+            amount= data.amount,
+            interest_date=data.record_expense_date,
+            remarks=data.remarks
+        )
+
+        return {
+            "status": "success",
+            "message": f"Recorded {new_expense.amount} expense to General Fund",
+            "transaction_id": new_expense.id
+        }
+    except ValueError as ve:
+        raise HTTPException(status_code=400,detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+@app.post("/ledger/income")    
+def record_income(data: BankInterestRequest, session: Session = Depends(get_session)):
+    """Records interest earned by the fund's bank account (Member 4)."""
+    try:
+        new_income = logic.record_expense_interest(
+            session=session,
+            amount= data.amount,
+            interest_date=data.record_interest_date,
+            remarks=data.remarks
+        )
+
+        return {
+            "status": "success",
+            "message": f"Recorded {new_income.amount} income to General Fund",
+            "transaction_id": new_income.id
+        }
+    except ValueError as ve:
+        raise HTTPException(status_code=400,detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.get("/ledger/filter")
+
+
+@app.get("/loans/interest-only")
+def get_interest_only(loan_id: int, target_date: date, session: Session = Depends(get_session)):
+    loan = logic.get_loan_record(session, loan_id)
+    if not loan: return {"interest": 0}
+    interest = logic.calculate_interest(loan, target_date)
+    return {"interest": float(interest)}
+
+# Show Only Profit Earned
+@app.get("/profit")
+def get_profit_report(session: Session = Depends(get_session)):
+    total_profit, breakdown = logic.calculate_total_profit(session)
+    return {
+        "total_profit_earned": float(total_profit),
+        "breakdown": breakdown
+    }
+
+# Create new borrower
+@app.post("/borrowers", response_model=Borrower)
+def create_borrower(data: BorrowerCreate, session: Session = Depends(get_session)):
+    """Add a new person to the system so you can lend to them."""
+    new_borrower = Borrower(name=data.name)
+    session.add(new_borrower)
+    try:
+        session.commit()
+        session.refresh(new_borrower)
+        return new_borrower
+    except Exception:
+        session.rollback()
+        raise HTTPException(status_code=400, detail="Borrower already exists")
+
+
 
 @app.post("/loans/refresh-all")
 def refresh_all_loan_statuses(session: Session = Depends(get_session)):
@@ -306,45 +377,9 @@ def refresh_all_loan_statuses(session: Session = Depends(get_session)):
     return {"message": f"Refresh complete. {updated_count} loans updated to Overdue."}
 
 
-@app.post("/members/withdraw")
-def member_withdraw(data: WithdrawalRequest, session: Session = Depends(get_session)):
-    try:
-        entry = logic.record_member_withdrawal(session, data.member_id, data.amount, data.date)
-        return {"status": "Success", "amount": float(entry.amount)}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    
-@app.post("/members/withdraw-global")
-def withdraw_global(data: GlobalWithdrawRequest, session: Session = Depends(get_session)):
-    """Triggers a withdrawal for all partners based on their stakes."""
-    try:
-        result = logic.record_global_withdrawal(session, data.total_amount, data.withdraw_date)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/income")    
-def record_income(data: BankInterestRequest, session: Session = Depends(get_session)):
-    """Records interest earned by the fund's bank account (Member 4)."""
-    try:
-        new_income = logic.record_bank_interest(
-            session=session,
-            amount= data.amount,
-            interest_date=data.interest_date,
-            remarks=data.remarks
-        )
-
-        return {
-            "status": "success",
-            "message": f"Recorded {new_income.amount} income to General Fund",
-            "transaction_id": new_income.id
-        }
-    except ValueError as ve:
-        raise HTTPException(status_code=400,detail=str(ve))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 #--- TEST Routes ---
-@app.post("/test")
-def test_in_main(session: Session = Depends(get_session)):
-    test_logic.test(session)
+# @app.post("/test")
+# def test_in_main(session: Session = Depends(get_session)):
+#     test_logic.test(session)

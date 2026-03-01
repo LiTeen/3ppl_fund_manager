@@ -181,19 +181,29 @@ def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_re
     return loan
 
 
-def record_bank_interest(session: Session, amount: Decimal, interest_date: date, remarks: str = None):
+def record_expense_interest(session: Session, amount: Decimal, record_date: date, remarks: str = None):
     """Adds bank interest profit to the General Fund (Member 4)."""
-    if amount <= 0:
-        raise ValueError("Income amount must be positive.")
+    if amount == 0:
+        raise ValueError("Amount cannot be 0.")
     
-    # Member 4 is your 'General Fund' system account
-    new_entry = Transaction_Ledger(
-        member_id=4, 
-        amount=amount, 
-        category=TransactionCategory.BANK_INT_RECEIVED,
-        timestamp=datetime.combine(interest_date, datetime.min.time()),
-        remarks=remarks 
-    )
+    elif amount > 0:
+        new_entry = Transaction_Ledger(
+            member_id=4, 
+            amount=amount, 
+            category=TransactionCategory.BANK_INT_RECEIVED,
+            timestamp=datetime.combine(record_date, datetime.min.time()),
+            remarks=remarks 
+        )
+    
+    elif amount < 0:
+        new_entry = Transaction_Ledger(
+            member_id=4,
+            amount=amount,
+            category=TransactionCategory.EXPENSE_OUT,
+            timestamp=datetime.combine(record_date,datetime.min.time()),
+            remarks=remarks
+        )
+
     
     session.add(new_entry)
     session.commit()
