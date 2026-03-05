@@ -58,8 +58,8 @@ if dash_data:
             st.info("Redirecting to withdraw page...")
         if st.button("See active loan",use_container_width=True):
             st.switch_page("pages/2 Loan List.py")
-        if st.button("Add bank Interest", use_container_width=True):
-            pass # Link to bank interest form
+        if st.button("Add Income/Expense Record", use_container_width=True):
+            st.switch_page("pages/add bank interest.py")
 
     # --- 4. Footer Buttons ---
     st.write("---")
