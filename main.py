@@ -171,8 +171,10 @@ def list_active_loans(session: Session = Depends(get_session)):
         })
     return results
 
+"""Duplicates of loan/quote"""
 @app.get("/loans/calculator")
 def get_total_needed(loan_id: int, target_reduction: Decimal, target_date: date, session: Session = Depends(get_session)):
+   
     loan = logic.get_loan_record(session, loan_id)
     if not loan: return {"total": 0}
     interest = logic.calculate_interest(loan, target_date)

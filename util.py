@@ -6,7 +6,7 @@ import calendar
 from models import Loan
 
 
-# --- UTILITIES ---
+# --- FUNCTION ---
 
 def round_half_up(decimal_num: Decimal) -> Decimal:
     """Standard financial rounding to 2 decimal places."""

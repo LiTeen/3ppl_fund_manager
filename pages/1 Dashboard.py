@@ -54,8 +54,8 @@ if dash_data:
     with c2:
         if st.button("Member Withdraw", use_container_width=True):
             st.info("Redirecting to withdraw page...")
-        if st.button("See active loan", use_container_width=True):
-            pass # Link to your loan list
+        if st.button("See active loan",use_container_width=True):
+            st.switch_page("pages/2 Loan List.py")
         if st.button("Add bank Interest", use_container_width=True):
             pass # Link to bank interest form
 

@@ -48,7 +48,7 @@ def refresh_all_data():
 
     try:
         # Fetch loans
-        loans_response = get_api("loans/all")
+        loans_response = get_api("loans")
         if loans_response:
             st.session_state.all_loans = loans_response
         else:

@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 from app import refresh_all_data
 
+refresh_all_data()
 st.title("Recent Transactions")
 
 
