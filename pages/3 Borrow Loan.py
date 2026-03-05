@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 from datetime import date
 from ui_state import ensure_data_synced, get_api, init_session_state, post_api, refresh_all_data
 
@@ -87,7 +87,7 @@ with col1:
             st.success("Loan issued successfully")
             st.session_state.is_synced = False
             refresh_all_data()
-            st.switch_page("pages/1 Dashboard.py")
+            st.switch_page("dashboard.py")
         elif result:
             st.error(result.json().get("detail", "Loan issue failed"))
         else:
@@ -95,9 +95,9 @@ with col1:
 
 with col2:
     if st.button("CANCEL", use_container_width=True):
-        st.switch_page("pages/1 Dashboard.py")
+        st.switch_page("dashboard.py")
 
-if st.sidebar.button("🔄 Sync with Database"):
+if st.sidebar.button("ðŸ”„ Sync with Database"):
     if refresh_all_data():
         st.success("Synced!")
         st.rerun()

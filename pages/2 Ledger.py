@@ -1,6 +1,6 @@
-import streamlit as st
+﻿import streamlit as st
 from datetime import datetime
-from ui_state import ensure_data_synced, init_session_state, refresh_all_data
+from ui_state import delete_api, ensure_data_synced, init_session_state, refresh_all_data
 
 init_session_state()
 ensure_data_synced()
@@ -28,11 +28,51 @@ if all_data:
         reverse=(sort_order == "Latest"),
     )
 
+    selected_ids = [
+        record["id"]
+        for record in filtered
+        if st.session_state.get(f"ledger_delete_{record['id']}", False)
+    ]
+
+    action_col1, action_col2 = st.columns([2, 1])
+    with action_col1:
+        st.caption(f"Selected: {len(selected_ids)}")
+    with action_col2:
+        if st.button("Delete Selected", type="primary", use_container_width=True):
+            if not selected_ids:
+                st.warning("No transactions selected.")
+            else:
+                deleted = 0
+                failed = 0
+                for ledger_id in selected_ids:
+                    res = delete_api(f"maintenance/ledger/{ledger_id}")
+                    if res and res.status_code == 200:
+                        deleted += 1
+                        st.session_state.pop(f"ledger_delete_{ledger_id}", None)
+                    else:
+                        failed += 1
+
+                st.session_state.is_synced = False
+                refresh_all_data()
+
+                if deleted:
+                    st.success(f"Deleted {deleted} transaction(s).")
+                if failed:
+                    st.error(f"Failed to delete {failed} transaction(s).")
+                st.rerun()
+
     for record in filtered:
-        col1, col2, col3 = st.columns([0.5, 1, 1])
+        col0, col1, col2, col3 = st.columns([0.55, 0.5, 1, 1])
+
+        with col0:
+            st.checkbox(
+                "Select",
+                key=f"ledger_delete_{record['id']}",
+                label_visibility="collapsed",
+            )
 
         with col1:
-            st.markdown("### ➕" if record["amount"] >= 0 else "### ➖")
+            st.markdown("### +" if record["amount"] >= 0 else "### -")
 
         with col2:
             st.markdown(f"**{record['category']}**")
@@ -50,7 +90,7 @@ if all_data:
 else:
     st.info("No transactions yet.")
 
-if st.sidebar.button("🔄 Sync with Database"):
+if st.sidebar.button("Sync with Database"):
     if refresh_all_data():
         st.success("Synced!")
         st.rerun()
