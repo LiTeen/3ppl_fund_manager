@@ -1,4 +1,0 @@
-/loans/all > /loans
-/loans/issue
-/loans/calculate-total > /loans/calculator
-/income >

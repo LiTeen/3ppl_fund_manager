@@ -1,10 +1,11 @@
 import streamlit as st
 import requests
 import plotly.graph_objects as go
-from app import init_session_state, refresh_all_data
+from ui_state import ensure_data_synced, init_session_state, refresh_all_data
 
 
 init_session_state()
+ensure_data_synced()
 
 st.set_page_config(page_title="3PPL Fund Manager", layout="centered")
 

@@ -1,9 +1,9 @@
 import streamlit as st
 from datetime import date
-from app import init_session_state, get_api, post_api, refresh_all_data
+from ui_state import ensure_data_synced, get_api, init_session_state, post_api, refresh_all_data
 
 init_session_state()
-refresh_all_data()
+ensure_data_synced()
 
 st.title("Loan")
 

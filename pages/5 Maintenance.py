@@ -1,8 +1,8 @@
 import streamlit as st
-from app import init_session_state, delete_api, refresh_all_data
+from ui_state import delete_api, ensure_data_synced, init_session_state, refresh_all_data
 
 init_session_state()
-refresh_all_data()
+ensure_data_synced()
 
 st.title("Maintenance")
 
