@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
-from app import refresh_all_data 
+from app import init_session_state, refresh_all_data 
+
+init_session_state()
 
 st.title("📂 Loan Portfolio")
 
@@ -8,7 +10,7 @@ st.title("📂 Loan Portfolio")
 view_mode = st.radio("Select View", ["Active Loans", "Closed Loans", "All History"], horizontal=True)
 
 # 3. Logic to "Slice" the Session State data
-all_data = st.session_state.all_loans
+all_data = st.session_state.get("all_loans", [])
 
 if all_data:
     if view_mode == "Active Loans":

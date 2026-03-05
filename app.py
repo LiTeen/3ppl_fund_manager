@@ -3,18 +3,22 @@ import requests
 
 API_URL = "http://localhost:8000"
 
-# Initialize
-if "all_dash" not in st.session_state:
-    st.session_state.all_dash = []
+def init_session_state():
+    """Ensure shared keys exist for every page in the multipage app."""
+    if "all_dash" not in st.session_state:
+        st.session_state.all_dash = []
 
-if "all_loans" not in st.session_state:
-    st.session_state.all_loans = []
+    if "all_loans" not in st.session_state:
+        st.session_state.all_loans = []
 
-if "all_ledger" not in st.session_state:
-    st.session_state.all_ledger = []
+    if "all_ledger" not in st.session_state:
+        st.session_state.all_ledger = []
 
-if "is_synced" not in st.session_state:
-    st.session_state.is_synced = False
+    if "is_synced" not in st.session_state:
+        st.session_state.is_synced = False
+
+
+init_session_state()
 
 # --- API HELPERS ---
 def get_api(endpoint, params=None):
@@ -76,5 +80,4 @@ def refresh_all_data():
 # Initial fetch only if empty
 if not st.session_state.is_synced:
     refresh_all_data()
-
 
