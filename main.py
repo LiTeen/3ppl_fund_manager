@@ -49,15 +49,10 @@ class LoanCreate(BaseSchema):
 class BorrowerCreate(BaseSchema):
     name: str
 
-class BankInterestRequest(BaseSchema):
+class IncomeExpenseRequest(BaseSchema):
     amount: Decimal
-    record_interest_date: date
-    remarks: Optional[str] = "FD Interest Received"
-
-class ExpensesRequest(BaseSchema):
-    amount: Decimal
-    record_expense_date: date
-    remarks: Optional[str] = "Expense out"
+    record_date: date
+    remarks: Optional[str] = None
 
 
 class WithdrawalRequest(BaseSchema): # Uses the Decimal-safe base
@@ -285,21 +280,22 @@ def get_full_ledger(session: Session = Depends(get_session)):
         })
     return results
 
-@app.post("/ledger/expense")    
-def record_expense(data: ExpensesRequest, session: Session = Depends(get_session)):
-    """Records expenses by the fund's bank account (Member 4)."""
+@app.post("/ledger/record")
+def record_income_expense(data: IncomeExpenseRequest, session: Session = Depends(get_session)):
+    """Records either income or expense to the General Fund based on amount sign."""
     try:
-        new_expense = logic.record_expense_interest(
+        new_entry = logic.record_income_expense(
             session=session,
-            amount= data.amount,
-            interest_date=data.record_expense_date,
+            amount=data.amount,
+            record_date=data.record_date,
             remarks=data.remarks
         )
 
+        entry_type = "income" if new_entry.amount > 0 else "expense"
         return {
             "status": "success",
-            "message": f"Recorded {new_expense.amount} expense to General Fund",
-            "transaction_id": new_expense.id
+            "message": f"Recorded {new_entry.amount} {entry_type} to General Fund",
+            "transaction_id": new_entry.id
         }
     except ValueError as ve:
         raise HTTPException(status_code=400,detail=str(ve))
@@ -307,26 +303,14 @@ def record_expense(data: ExpensesRequest, session: Session = Depends(get_session
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-@app.post("/ledger/income")    
-def record_income(data: BankInterestRequest, session: Session = Depends(get_session)):
-    """Records interest earned by the fund's bank account (Member 4)."""
-    try:
-        new_income = logic.record_expense_interest(
-            session=session,
-            amount= data.amount,
-            interest_date=data.record_interest_date,
-            remarks=data.remarks
-        )
+# @app.post("/ledger/expense")
+# def record_expense(data: ExpensesRequest, session: Session = Depends(get_session)):
+#     pass
 
-        return {
-            "status": "success",
-            "message": f"Recorded {new_income.amount} income to General Fund",
-            "transaction_id": new_income.id
-        }
-    except ValueError as ve:
-        raise HTTPException(status_code=400,detail=str(ve))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+# @app.post("/ledger/income")
+# def record_income(data: BankInterestRequest, session: Session = Depends(get_session)):
+#     pass
 
 @app.get("/ledger/filter")
 

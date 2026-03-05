@@ -181,30 +181,30 @@ def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_re
     return loan
 
 
-def record_expense_interest(session: Session, amount: Decimal, record_date: date, remarks: str = None):
-    """Adds bank interest profit to the General Fund (Member 4)."""
+def record_income_expense(session: Session, amount: Decimal, record_date: date, remarks: str = None):
+    """Adds either income or expense entry to the General Fund (Member 4)."""
     if amount == 0:
         raise ValueError("Amount cannot be 0.")
-    
-    elif amount > 0:
+
+    cleaned_remarks = remarks.strip() if isinstance(remarks, str) else None
+
+    if amount > 0:
         new_entry = Transaction_Ledger(
-            member_id=4, 
-            amount=amount, 
+            member_id=4,
+            amount=amount,
             category=TransactionCategory.BANK_INT_RECEIVED,
             timestamp=datetime.combine(record_date, datetime.min.time()),
-            remarks=remarks 
+            remarks=cleaned_remarks or "Income record"
         )
-    
-    elif amount < 0:
+    else:
         new_entry = Transaction_Ledger(
             member_id=4,
             amount=amount,
             category=TransactionCategory.EXPENSE_OUT,
-            timestamp=datetime.combine(record_date,datetime.min.time()),
-            remarks=remarks
+            timestamp=datetime.combine(record_date, datetime.min.time()),
+            remarks=cleaned_remarks or "Expense record"
         )
 
-    
     session.add(new_entry)
     session.commit()
     return new_entry
