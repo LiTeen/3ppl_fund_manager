@@ -3,15 +3,13 @@ from sqlmodel import Session, select, func
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
-from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict
-from database import engine, create_db_and_tables, get_session
+from database import create_db_and_tables, get_session
 import logic 
 from models import (
-    Member, Loan, LoanStatus, Borrower, 
-    Transaction_Ledger, TransactionCategory, SQLModel
+    Member, Loan, LoanStatus, Borrower, Loan_Repayment,
+    Transaction_Ledger, TransactionCategory
 )
-import test_logic 
 
 app = FastAPI(title="Fund Manager API")
 
@@ -40,14 +38,12 @@ class RepaymentRequest(BaseSchema):
     date_received: date
 
 class LoanCreate(BaseSchema):
-    borrower_id: int
+    borrower_id: Optional[int] = None
+    borrower_name: Optional[str] = None
     principal: Decimal
     lending_date: date = date.today()
-    plan_payback_date: date = date(lending_date.year + 1,lending_date.month,lending_date.day)
-    
+    plan_payback_date: date = date(lending_date.year + 1, lending_date.month, lending_date.day)
 
-class BorrowerCreate(BaseSchema):
-    name: str
 
 class IncomeExpenseRequest(BaseSchema):
     amount: Decimal
@@ -109,6 +105,12 @@ def get_dashboard(session: Session = Depends(get_session)):
 def get_all_members(session: Session = Depends(get_session)):
     return session.exec(select(Member)).all()
 
+
+@app.get("/borrowers", response_model=List[Borrower])
+def get_all_borrowers(session: Session = Depends(get_session)):
+    statement = select(Borrower).order_by(Borrower.name.asc())
+    return session.exec(statement).all()
+
 @app.post("/members/withdraw")
 def member_withdraw(data: WithdrawalRequest, session: Session = Depends(get_session)):
     try:
@@ -167,13 +169,22 @@ def list_active_loans(session: Session = Depends(get_session)):
     return results
 
 """Duplicates of loan/quote"""
-@app.get("/loans/calculator")
-def get_total_needed(loan_id: int, target_reduction: Decimal, target_date: date, session: Session = Depends(get_session)):
-   
-    loan = logic.get_loan_record(session, loan_id)
-    if not loan: return {"total": 0}
-    interest = logic.calculate_interest(loan, target_date)
-    return {"total": float(target_reduction + interest)}
+# @app.get("/loans/calculator")
+# def get_total_needed(loan_id: int, target_reduction: Decimal, target_date: date, session: Session = Depends(get_session)):
+#     """Backward-compatible endpoint that returns only total payment needed."""
+#     try:
+#         quote = logic.calculate_required_payment(session, loan_id, target_reduction, target_date)
+#         return {"total": float(quote["total"])}
+#     except ValueError:
+#         return {"total": 0}
+#
+@app.get("/loans/preview-quote")
+def get_new_loan_preview_quote(principal: Decimal, lending_date: date, plan_payback_date: date):
+    try:
+        quote = logic.preview_new_loan_quote(principal, lending_date, plan_payback_date)
+        return {k: float(v) for k, v in quote.items()}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
 
 # Create New Loan
 @app.post("/loans/issue")
@@ -184,16 +195,31 @@ def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
     if float(data.principal) > current_cash:
         raise HTTPException(status_code=400, detail=f"Insufficient funds. Max available: {current_cash}")
     
-    # Fetch the borrower to get the name
-    borrower = session.get(Borrower, data.borrower_id)
-    if not borrower:
-        raise HTTPException(status_code=404, detail="Borrower not found")
-    
+    borrower = None
+    if data.borrower_id:
+        borrower = session.get(Borrower, data.borrower_id)
+        if not borrower:
+            raise HTTPException(status_code=404, detail="Borrower not found")
+    elif data.borrower_name:
+        clean_name = data.borrower_name.strip()
+        if not clean_name:
+            raise HTTPException(status_code=400, detail="Borrower name cannot be empty")
+
+        existing = session.exec(select(Borrower).where(Borrower.name == clean_name)).first()
+        if existing:
+            borrower = existing
+        else:
+            borrower = Borrower(name=clean_name)
+            session.add(borrower)
+            session.flush()
+    else:
+        raise HTTPException(status_code=400, detail="Provide borrower_id or borrower_name")
+
     # check borrow amount must be more than 0
     if data.principal > 0:
         # Create the Loan
         new_loan = Loan(
-            borrower_id=data.borrower_id,
+            borrower_id=borrower.id,
             principal=data.principal,
             lending_date=data.lending_date,
             plan_payback_date=data.plan_payback_date,
@@ -218,18 +244,17 @@ def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
     else:
         return {"message": "Loan amount cannot be 0 or negative."}
 
-@app.get("/loans/quote")
-def get_repayment_quote(
-    loan_id: int, 
-    target_reduction: Decimal, 
-    target_date: Optional[date] = None,
-    session: Session = Depends(get_session)
-):
-    """How much to pay to reduce principal by X? (Includes interest)."""
-    quote = logic.calculate_required_payment(session, loan_id, target_reduction, target_date)
-    # Convert Decimals to floats for JSON
-    return {k: float(v) for k, v in quote.items()}
-
+# @app.get("/loans/quote")
+# def get_repayment_quote(
+#     loan_id: int, 
+#     target_reduction: Decimal, 
+#     target_date: Optional[date] = None,
+#     session: Session = Depends(get_session)
+# ):
+#     """How much to pay to reduce principal by X? (Includes interest)."""
+#     quote = logic.calculate_required_payment(session, loan_id, target_reduction, target_date)
+#     # Convert Decimals to floats for JSON
+#     return {k: float(v) for k, v in quote.items()}
 @app.post("/loans/repay")
 def record_repayment(data: RepaymentRequest, session: Session = Depends(get_session)):
     """The 'Submit' button when you receive cash."""
@@ -313,16 +338,44 @@ def record_income_expense(data: IncomeExpenseRequest, session: Session = Depends
 #     pass
 
 @app.get("/ledger/filter")
+def get_filtered_ledger(
+    category: Optional[TransactionCategory] = Query(default=None),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    session: Session = Depends(get_session)
+):
+    statement = select(Transaction_Ledger)
+    if category:
+        statement = statement.where(Transaction_Ledger.category == category)
+
+    if sort_order == "asc":
+        statement = statement.order_by(Transaction_Ledger.timestamp.asc())
+    else:
+        statement = statement.order_by(Transaction_Ledger.timestamp.desc())
+
+    entries = session.exec(statement).all()
+    return [
+        {
+            "id": entry.id,
+            "member_id": entry.member_id,
+            "member_name": entry.member.name if entry.member else "Unknown",
+            "amount": float(entry.amount),
+            "timestamp": entry.timestamp.isoformat(),
+            "loan_id": entry.loan_id,
+            "category": entry.category.value,
+            "remarks": entry.remarks,
+        }
+        for entry in entries
+    ]
 
 
-@app.get("/loans/interest-only")
-def get_interest_only(loan_id: int, target_date: date, session: Session = Depends(get_session)):
-    loan = logic.get_loan_record(session, loan_id)
-    if not loan: return {"interest": 0}
-    interest = logic.calculate_interest(loan, target_date)
-    return {"interest": float(interest)}
-
-# Show Only Profit Earned
+# @app.get("/loans/interest-only")
+# def get_interest_only(loan_id: int, target_date: date, session: Session = Depends(get_session)):
+#     loan = logic.get_loan_record(session, loan_id)
+#     if not loan: return {"interest": 0}
+#     interest = logic.calculate_interest(loan, target_date)
+#     return {"interest": float(interest)}
+#
+# # Show Only Profit Earned
 @app.get("/profit")
 def get_profit_report(session: Session = Depends(get_session)):
     total_profit, breakdown = logic.calculate_total_profit(session)
@@ -331,41 +384,90 @@ def get_profit_report(session: Session = Depends(get_session)):
         "breakdown": breakdown
     }
 
-# Create new borrower
-@app.post("/borrowers", response_model=Borrower)
-def create_borrower(data: BorrowerCreate, session: Session = Depends(get_session)):
-    """Add a new person to the system so you can lend to them."""
-    new_borrower = Borrower(name=data.name)
-    session.add(new_borrower)
-    try:
-        session.commit()
-        session.refresh(new_borrower)
-        return new_borrower
-    except Exception:
-        session.rollback()
-        raise HTTPException(status_code=400, detail="Borrower already exists")
+# @app.post("/loans/refresh-all")
+# def refresh_all_loan_statuses(session: Session = Depends(get_session)):
+#     """Checks every active loan and marks as 'od' if past plan_payback_date."""
+#     active_loans = session.exec(select(Loan).where(Loan.status != LoanStatus.CLOSED)).all()
+#     updated_count = 0
+#    
+#     for loan in active_loans:
+#         if loan.plan_payback_date < date.today():
+#             loan.status = LoanStatus.OVERDUE
+#             session.add(loan)
+#             updated_count += 1
+#            
+#     session.commit()
+#     return {"message": f"Refresh complete. {updated_count} loans updated to Overdue."}
+#
+#
+#
+#
+# #--- TEST Routes ---
+# # @app.post("/test")
+# # def test_in_main(session: Session = Depends(get_session)):
+# #     test_logic.test(session)
+
+@app.get("/analyse/borrowers")
+def borrower_analysis(session: Session = Depends(get_session)):
+    borrowers = session.exec(select(Borrower).order_by(Borrower.name.asc())).all()
+    results = []
+
+    for borrower in borrowers:
+        loans = session.exec(select(Loan).where(Loan.borrower_id == borrower.id)).all()
+        loan_ids = [loan.id for loan in loans]
+        total_interest = Decimal(0)
+
+        if loan_ids:
+            interest_statement = select(func.sum(Transaction_Ledger.amount)).where(
+                Transaction_Ledger.category == TransactionCategory.LOAN_INT_RECEIVED,
+                Transaction_Ledger.loan_id.in_(loan_ids),
+            )
+            total_interest = session.exec(interest_statement).one() or Decimal(0)
+
+        results.append({
+            "borrower_id": borrower.id,
+            "borrower_name": borrower.name,
+            "loan_count": len(loans),
+            "interest_contributed": float(total_interest),
+        })
+
+    return results
 
 
+@app.delete("/maintenance/loans/{loan_id}")
+def delete_loan_record(loan_id: int, session: Session = Depends(get_session)):
+    loan = session.get(Loan, loan_id)
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
 
-@app.post("/loans/refresh-all")
-def refresh_all_loan_statuses(session: Session = Depends(get_session)):
-    """Checks every active loan and marks as 'od' if past plan_payback_date."""
-    active_loans = session.exec(select(Loan).where(Loan.status != LoanStatus.CLOSED)).all()
-    updated_count = 0
-    
-    for loan in active_loans:
-        if loan.plan_payback_date < date.today():
-            loan.status = LoanStatus.OVERDUE
-            session.add(loan)
-            updated_count += 1
-            
+    loan_ledger_entries = session.exec(
+        select(Transaction_Ledger).where(Transaction_Ledger.loan_id == loan_id)
+    ).all()
+    repayments = session.exec(select(Loan_Repayment).where(Loan_Repayment.loan_id == loan_id)).all()
+
+    for entry in loan_ledger_entries:
+        session.delete(entry)
+
+    for repayment in repayments:
+        session.delete(repayment)
+
+    session.delete(loan)
     session.commit()
-    return {"message": f"Refresh complete. {updated_count} loans updated to Overdue."}
+
+    return {
+        "status": "success",
+        "message": f"Loan {loan_id} deleted",
+        "deleted_ledger_entries": len(loan_ledger_entries),
+        "deleted_repayments": len(repayments),
+    }
 
 
+@app.delete("/maintenance/ledger/{entry_id}")
+def delete_ledger_entry(entry_id: int, session: Session = Depends(get_session)):
+    entry = session.get(Transaction_Ledger, entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Ledger entry not found")
 
-
-#--- TEST Routes ---
-# @app.post("/test")
-# def test_in_main(session: Session = Depends(get_session)):
-#     test_logic.test(session)
+    session.delete(entry)
+    session.commit()
+    return {"status": "success", "message": f"Ledger entry {entry_id} deleted"}
