@@ -1,15 +1,15 @@
 import streamlit as st
 import requests
 from datetime import date
-from app import post_api, get_api
-from app import refresh_all_data
+from app import init_session_state, post_api, get_api, refresh_all_data
 
+init_session_state()
 refresh_all_data()
 
 st.header("💸 Record Loan Repayment")
 
 # Access data from session state synced in app.py
-repay_data = st.session_state.all_loans
+repay_data = st.session_state.get("all_loans", [])
 
 # Filter for ACTIVE loans to populate the dropdown
 active_loans = {

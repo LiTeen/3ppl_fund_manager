@@ -1,13 +1,15 @@
 import streamlit as st
 import requests
 import plotly.graph_objects as go
-from app import refresh_all_data
+from app import init_session_state, refresh_all_data
 
+
+init_session_state()
 
 st.set_page_config(page_title="3PPL Fund Manager", layout="centered")
 
 
-dash_data = st.session_state.all_dash
+dash_data = st.session_state.get("all_dash", {})
 
 if dash_data:
     # --- 1. Circle (Donut) Chart ---

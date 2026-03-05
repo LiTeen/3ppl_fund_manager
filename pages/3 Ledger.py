@@ -1,13 +1,13 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from app import refresh_all_data
+from app import init_session_state, refresh_all_data
 
+init_session_state()
 refresh_all_data()
 st.title("Recent Transactions")
 
-
-all_data = st.session_state.all_ledger
+all_data = st.session_state.get("all_ledger", [])
 
 # Custom ledger display
 if all_data:
