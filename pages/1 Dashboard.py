@@ -13,8 +13,8 @@ dash_data = st.session_state.get("all_dash", {})
 
 if dash_data:
     # --- 1. Circle (Donut) Chart ---
-    labels = [m['name'] for m in dash_data['members']]
-    values = [m['current_value'] for m in dash_data['members']]
+    labels = ["Profit", "Cash at hand"]
+    values = [dash_data['profit_earned'], dash_data['cash_on_hand']]
     
     # Matching your image's purple/pink aesthetic
     colors = ['#9b5de5', '#f15bb5', '#fee440'] 
@@ -56,16 +56,18 @@ if dash_data:
     with c2:
         if st.button("Member Withdraw", use_container_width=True):
             st.info("Redirecting to withdraw page...")
-        if st.button("See active loan",use_container_width=True):
-            st.switch_page("pages/2 Loan List.py")
-        if st.button("Add Income/Expense Record", use_container_width=True):
-            st.switch_page("pages/add bank interest.py")
+        if st.button("Analyse",use_container_width=True):
+            st.switch_page("pages/4 Analyse.py")
+        if st.button("Maintenance", use_container_width=True):
+            st.switch_page("pages/5 Maintenance.py")
 
     # --- 4. Footer Buttons ---
     st.write("---")
     f_col1, f_col2 = st.columns(2)
-    f_col1.button("See Ledger", use_container_width=True)
-    f_col2.button("Borrow Loan", use_container_width=True, type="primary")
+    if f_col1.button("See Ledger", use_container_width=True):
+        st.switch_page("pages/2 Ledger.py")
+    if f_col2.button("Borrow Loan", use_container_width=True, type="primary"):
+        st.switch_page("pages/3 Loan.py")
 
 
     # Provide a Refresh Button

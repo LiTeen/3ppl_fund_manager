@@ -4,7 +4,7 @@ from typing import Optional, Dict
 from sqlmodel import Session, select, func
 from util import round_half_up,calculate_interest
 from models import (
-    Member, Loan, Transaction_Ledger, Borrower, 
+    Member, Loan, Transaction_Ledger, 
     Loan_Repayment, LoanStatus, TransactionCategory, PaymentType
 )
 
@@ -90,6 +90,34 @@ def calculate_required_payment(session: Session, loan_id: int, target_reduction:
         'interest': interest_needed,
         'reduction': round_half_up(target_reduction),
         'total': round_half_up(total_required)
+    }
+
+
+
+def preview_new_loan_quote(principal: Decimal, lending_date: date, plan_payback_date: date) -> Dict:
+    """Returns projected interest and total repayment for a brand new loan."""
+    if principal <= 0:
+        raise ValueError("Principal must be greater than 0.")
+
+    if plan_payback_date < lending_date:
+        raise ValueError("Plan payback date cannot be earlier than lending date.")
+
+    preview_loan = Loan(
+        borrower_id=0,
+        principal=principal,
+        interest_rate=Decimal('0.03'),
+        lending_date=lending_date,
+        plan_payback_date=plan_payback_date,
+        status=LoanStatus.PENDING,
+    )
+
+    interest_needed = calculate_interest(preview_loan, plan_payback_date)
+    total_required = round_half_up(principal + interest_needed)
+
+    return {
+        'interest': interest_needed,
+        'principal': round_half_up(principal),
+        'total': total_required,
     }
 
 def check_loan_status(session: Session, loan_id: int, date_receive_payment: date = None):
