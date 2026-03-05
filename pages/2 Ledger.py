@@ -34,7 +34,7 @@ if all_data:
         if st.session_state.get(f"ledger_delete_{record['id']}", False)
     ]
 
-    action_col1, action_col2 = st.columns([2, 1])
+    action_col1, action_col2, action_col3 = st.columns([2, 1, 1])
     with action_col1:
         st.caption(f"Selected: {len(selected_ids)}")
     with action_col2:
@@ -60,6 +60,9 @@ if all_data:
                 if failed:
                     st.error(f"Failed to delete {failed} transaction(s).")
                 st.rerun()
+    with action_col3:
+        if st.button("Back to Dashboard", use_container_width=True):
+            st.switch_page("dashboard.py")
 
     for record in filtered:
         col0, col1, col2, col3 = st.columns([0.55, 0.5, 1, 1])
@@ -94,3 +97,4 @@ if st.sidebar.button("Sync with Database"):
     if refresh_all_data():
         st.success("Synced!")
         st.rerun()
+

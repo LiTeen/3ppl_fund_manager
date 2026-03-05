@@ -69,6 +69,9 @@ if loan_options:
 else:
     st.info("No deletable loan records for this filter.")
 
+if st.button("Back to Dashboard", use_container_width=True):
+    st.switch_page("dashboard.py")
+
 if st.sidebar.button("Sync with Database"):
     if refresh_all_data():
         st.success("Synced!")

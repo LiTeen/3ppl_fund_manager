@@ -157,12 +157,16 @@ def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_re
         raise ValueError(f"Payment exceeds principal. Max allowed principal reduction: {loan.principal}")
 
     # 4. DATABASE CHANGES (Uses the session provided)
+    borrower_name = loan.borrower.name if loan.borrower else "Unknown borrower"
+    payment_remark = f"Paid by {borrower_name}"
+
     if interest_portion > 0:
         int_ledger = Transaction_Ledger(
             member_id=4, 
             amount=interest_portion, 
             category=TransactionCategory.LOAN_INT_RECEIVED, 
-            loan_id=loan.id
+            loan_id=loan.id,
+            remarks=payment_remark,
         )
         session.add(int_ledger)
 
@@ -172,7 +176,8 @@ def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_re
             member_id=4, 
             amount=principal_reduction, 
             category=TransactionCategory.PRINCIPAL_RETURNED, 
-            loan_id=loan.id
+            loan_id=loan.id,
+            remarks=payment_remark,
         )
         session.add(pri_ledger)
 

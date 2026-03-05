@@ -1,11 +1,15 @@
-import streamlit as st
+﻿import streamlit as st
 import plotly.graph_objects as go
-from ui_state import ensure_data_synced, init_session_state, refresh_all_data
+from datetime import date
+from ui_state import ensure_data_synced, get_api, init_session_state, post_api, refresh_all_data
 
 init_session_state()
 ensure_data_synced()
 
 st.set_page_config(page_title="3PPL Fund Manager", layout="centered")
+
+if "show_member_withdraw" not in st.session_state:
+    st.session_state.show_member_withdraw = False
 
 dash_data = st.session_state.get("all_dash", {})
 ledger_data = st.session_state.get("all_ledger", [])
@@ -84,16 +88,69 @@ if dash_data:
 
     with c2:
         if st.button("Member Withdraw", use_container_width=True):
-            st.info("Redirecting to withdraw page...")
+            st.session_state.show_member_withdraw = True
         if st.button("Maintenance", use_container_width=True):
             st.switch_page("pages/5 Maintenance.py")
+
+    if st.session_state.show_member_withdraw:
+        st.divider()
+        st.subheader("Member Withdrawal")
+
+        members = get_api("members") or []
+        withdraw_members = [m for m in members if m.get("id", 0) < 4 and m.get("is_active", True)]
+        member_options = {
+            f"{m['name']} | Capital RM {float(m.get('initial_capital', 0.0)):,.2f}": int(m["id"])
+            for m in withdraw_members
+        }
+
+        if not member_options:
+            st.info("No active member available for withdrawal.")
+        else:
+            selected_member_label = st.selectbox("Member", list(member_options.keys()))
+            selected_member_id = member_options[selected_member_label]
+            withdraw_date = st.date_input("Withdrawal Date", value=date.today(), key="member_withdraw_date")
+            amount = st.number_input(
+                "Withdrawal Amount (RM)",
+                min_value=0.0,
+                max_value=max(0.0, float(dash_data.get("cash_on_hand", 0.0))),
+                value=0.0,
+                step=50.0,
+                key="member_withdraw_amount",
+            )
+
+            act_col1, act_col2 = st.columns(2)
+            with act_col1:
+                if st.button("Submit Withdrawal", type="primary", use_container_width=True):
+                    if amount <= 0:
+                        st.error("Withdrawal amount must be greater than 0.")
+                    else:
+                        payload = {
+                            "member_id": selected_member_id,
+                            "amount": amount,
+                            "date": withdraw_date.isoformat(),
+                        }
+                        res = post_api("members/withdraw", payload)
+                        if res and res.status_code == 200:
+                            st.success("Withdrawal recorded.")
+                            st.session_state.show_member_withdraw = False
+                            st.session_state.is_synced = False
+                            refresh_all_data()
+                            st.rerun()
+                        elif res:
+                            st.error(res.json().get("detail", "Withdrawal failed."))
+                        else:
+                            st.error("Server connection error.")
+            with act_col2:
+                if st.button("Cancel Withdrawal", use_container_width=True):
+                    st.session_state.show_member_withdraw = False
+                    st.rerun()
 
     st.write("---")
     f_col1, f_col2 = st.columns(2)
     if f_col1.button("Add Interest/Expense", use_container_width=True):
         st.switch_page("pages/4 Record Income Expense.py")
-    if f_col2.button("Borrow Loan", use_container_width=True, type="primary"):
-        st.switch_page("pages/3 Borrow Loan.py")
+    if f_col2.button("Borrow / Repay Loan", use_container_width=True, type="primary"):
+        st.switch_page("pages/3 Borrow Repay Loan.py")
 
 if st.sidebar.button("Sync with Database"):
     if refresh_all_data():
