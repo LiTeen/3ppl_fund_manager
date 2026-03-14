@@ -1,9 +1,10 @@
 ﻿import streamlit as st
 from datetime import datetime
-from ui_state import delete_api, ensure_data_synced, init_session_state, refresh_all_data
+from ui_state import apply_mobile_layout, delete_api, ensure_data_synced, init_session_state, refresh_all_data
 
 init_session_state()
 ensure_data_synced()
+apply_mobile_layout()
 st.title("Recent Transactions")
 
 all_data = st.session_state.get("all_ledger", [])

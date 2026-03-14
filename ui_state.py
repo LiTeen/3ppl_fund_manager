@@ -96,3 +96,41 @@ def ensure_data_synced():
     if not st.session_state.get("is_synced", False):
         return refresh_all_data()
     return True
+
+
+def apply_mobile_layout():
+    """Apply a lightweight responsive layout for small screens."""
+    st.markdown(
+        """
+        <style>
+        @media (max-width: 768px) {
+            .block-container {
+                padding-top: 1rem;
+                padding-left: 0.8rem;
+                padding-right: 0.8rem;
+                padding-bottom: 1.2rem;
+            }
+            [data-testid="stHorizontalBlock"] {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+            [data-testid="column"] {
+                width: 100% !important;
+                flex: 1 1 100% !important;
+            }
+            .stButton > button,
+            .stDownloadButton > button {
+                width: 100%;
+            }
+            .stSelectbox,
+            .stDateInput,
+            .stNumberInput,
+            .stTextInput,
+            .stRadio {
+                width: 100%;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )

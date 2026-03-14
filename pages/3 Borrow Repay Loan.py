@@ -1,9 +1,10 @@
 ﻿import streamlit as st
 from datetime import date
-from ui_state import ensure_data_synced, get_api, init_session_state, post_api, refresh_all_data
+from ui_state import apply_mobile_layout, ensure_data_synced, get_api, init_session_state, post_api, refresh_all_data
 
 init_session_state()
 ensure_data_synced()
+apply_mobile_layout()
 
 st.title("Borrow / Repay Loan")
 
