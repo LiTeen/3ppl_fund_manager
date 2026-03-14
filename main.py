@@ -163,6 +163,7 @@ def list_active_loans(session: Session = Depends(get_session)):
             "borrower": loan.borrower.name, # Relationship magic
             "principal": float(loan.principal),
             "accrued_interest": float(logic.calculate_interest(loan)),
+            "lending_date": loan.lending_date.isoformat(),
             "due_date": loan.plan_payback_date,
             "status": loan.status
         })
@@ -230,11 +231,17 @@ def create_loan(data: LoanCreate, session: Session = Depends(get_session)):
 
         # Create the Ledger Entry (Money leaving the fund)
         # Member 4 = General Fund / System Account
+        if data.lending_date < date.today():
+            get_timestamp = data.lending_date
+        else:
+            get_timestamp = date.today()
+
         ledger_entry = Transaction_Ledger(
             member_id=4,
             amount=-data.principal, # Negative because cash is leaving
             category=TransactionCategory.LOAN_OUT,
             loan_id=new_loan.id,
+            timestamp=get_timestamp,
             remarks=f"Loan issued to {borrower.name}"
         )
         session.add(ledger_entry)
@@ -325,7 +332,7 @@ def record_income_expense(data: IncomeExpenseRequest, session: Session = Depends
     except ValueError as ve:
         raise HTTPException(status_code=400,detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+        raise HTTPException(status_code=500, detail="Internal Server Error record income")
 
 
 # @app.post("/ledger/expense")
@@ -368,12 +375,13 @@ def get_filtered_ledger(
     ]
 
 
-# @app.get("/loans/interest-only")
-# def get_interest_only(loan_id: int, target_date: date, session: Session = Depends(get_session)):
-#     loan = logic.get_loan_record(session, loan_id)
-#     if not loan: return {"interest": 0}
-#     interest = logic.calculate_interest(loan, target_date)
-#     return {"interest": float(interest)}
+@app.get("/loans/interest-only")
+def get_interest_only(loan_id: int, target_date: date, session: Session = Depends(get_session)):
+    loan = logic.get_loan_record(session, loan_id)
+    if not loan:
+        return {"interest": 0.0}
+    interest = logic.calculate_interest(loan, target_date)
+    return {"interest": float(interest)}
 #
 # # Show Only Profit Earned
 @app.get("/profit")

@@ -159,6 +159,10 @@ def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_re
     # 4. DATABASE CHANGES (Uses the session provided)
     borrower_name = loan.borrower.name if loan.borrower else "Unknown borrower"
     payment_remark = f"Paid by {borrower_name}"
+    if date_received < date.today():
+        get_timestamp = datetime.combine(date_received, datetime.min.time())
+    else:
+        get_timestamp = datetime.now()
 
     if interest_portion > 0:
         int_ledger = Transaction_Ledger(
@@ -166,6 +170,7 @@ def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_re
             amount=interest_portion, 
             category=TransactionCategory.LOAN_INT_RECEIVED, 
             loan_id=loan.id,
+            timestamp=get_timestamp,
             remarks=payment_remark,
         )
         session.add(int_ledger)
@@ -177,6 +182,7 @@ def record_payment(session: Session, loan_id: int, amount_paid: Decimal, date_re
             amount=principal_reduction, 
             category=TransactionCategory.PRINCIPAL_RETURNED, 
             loan_id=loan.id,
+            timestamp=get_timestamp,
             remarks=payment_remark,
         )
         session.add(pri_ledger)
